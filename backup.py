@@ -4,19 +4,6 @@ import uuid
 import pandas as pd
 from PIL import Image
 import io
-import datetime
-import matplotlib.pyplot as plt
-
-# Librerías para generación de PDF corporativo
-from reportlab.lib.pagesizes import letter
-from reportlab.lib import colors
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image as RLImage, KeepTogether
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-
-# Librería para inyección de Excel Institucional e imágenes
-import openpyxl
-from openpyxl.drawing.image import Image as OpenpyxlImage
-import requests
 
 st.set_page_config(page_title="Estimapp", page_icon="🏗", layout="wide")
 
@@ -140,7 +127,7 @@ def optimizar_imagen(archivo_subido, max_dim=1280, calidad=80):
     except Exception:
         return archivo_subido.getvalue(), archivo_subido.type
 
-# Callbacks para categorías
+# Callbacks para categorías (limpieza y actualización atómica)
 def crear_categoria_callback():
     cat_nombre = st.session_state.get("input_nueva_cat", "").strip()
     if cat_nombre:
@@ -169,377 +156,7 @@ def eliminar_categoria_callback():
         except Exception:
             pass
 
-# =============================================================
-# MOTOR DE GENERACIÓN DE EXCEL INSTITUCIONAL CON OPENPYXL
-# =============================================================
-def descargar_plantilla_supabase(bucket_name, file_name):
-    url_plantilla = supabase.storage.from_(bucket_name).get_public_url(file_name)
-    response = requests.get(url_plantilla)
-    if response.status_code == 200:
-        return io.BytesIO(response.content)
-    else:
-        raise Exception(f"No se pudo descargar la plantilla de {url_plantilla}")
-
-def set_cell_value(ws, col, row, value):
-    """
-    Función francotiradora: Escribe el valor en la celda indicada.
-    Si la celda pertenece a un bloque combinado (MergedCell),
-    busca la coordenada principal (top-left) y escribe el dato ahí para evitar errores.
-    """
-    coord = f"{col}{row}"
-    cell = ws[coord]
-    
-    if type(cell).__name__ == 'MergedCell':
-        for rng in ws.merged_cells.ranges:
-            if cell.row >= rng.min_row and cell.row <= rng.max_row and cell.column >= rng.min_col and cell.column <= rng.max_col:
-                ws.cell(row=rng.min_row, column=rng.min_col).value = value
-                break
-    else:
-        cell.value = value
-
-def inyectar_datos_excel_imss(plantilla_bytes, proy_info, estimacion_info, conceptos_cat, estimaciones_dash):
-    wb = openpyxl.load_workbook(plantilla_bytes)
-    
-    # 1. Pestaña DATOS
-    monto_contratado_total = sum(float(c.get("cantidad_contratada") or 0.0) * float(c.get("precio_unitario") or 0.0) for c in conceptos_cat)
-    ws_datos = wb["DATOS"]
-    set_cell_value(ws_datos, 'B', 2, proy_info.get('nombre_obra', ''))
-    set_cell_value(ws_datos, 'B', 4, proy_info.get('descripcion_sintetica', ''))
-    set_cell_value(ws_datos, 'B', 6, proy_info.get('ubicacion', ''))
-    set_cell_value(ws_datos, 'B', 8, proy_info.get('unidad', ''))
-    set_cell_value(ws_datos, 'B', 12, proy_info.get('contratista', ''))
-    set_cell_value(ws_datos, 'B', 14, proy_info.get('residente_obra', ''))
-    set_cell_value(ws_datos, 'B', 16, proy_info.get('contrato_no', ''))
-    set_cell_value(ws_datos, 'B', 20, f"DEL {estimacion_info.get('periodo_inicio', '')} AL {estimacion_info.get('periodo_fin', '')}")
-    set_cell_value(ws_datos, 'B', 23, datetime.datetime.now().strftime("%d/%m/%Y"))
-    set_cell_value(ws_datos, 'B', 31, f"{estimacion_info.get('num_periodo', 1)} ({estimacion_info.get('estado', 'NORMAL').upper()})")
-    set_cell_value(ws_datos, 'B', 35, monto_contratado_total)
-
-    # 2. Pestaña CATALOGO
-    ws_cat = wb["CATALOGO"]
-    fila_cat = 14 # Ajustado para saltar los encabezados de la plantilla vacía
-    for c in conceptos_cat:
-        set_cell_value(ws_cat, 'A', fila_cat, c['clave'])
-        set_cell_value(ws_cat, 'B', fila_cat, c['descripcion'])
-        set_cell_value(ws_cat, 'C', fila_cat, normalizar_unidad(c['unidad']))
-        cant = float(c.get('cantidad_contratada') or 0.0)
-        pu = float(c.get('precio_unitario') or 0.0)
-        set_cell_value(ws_cat, 'D', fila_cat, cant)
-        set_cell_value(ws_cat, 'E', fila_cat, pu)
-        set_cell_value(ws_cat, 'F', fila_cat, "") 
-        set_cell_value(ws_cat, 'G', fila_cat, cant * pu)
-        set_cell_value(ws_cat, 'H', fila_cat, (cant * pu / monto_contratado_total) if monto_contratado_total > 0 else 0)
-        fila_cat += 1
-
-    # Pre-cálculos cruzados para Estimacion y Generador
-    acumulados_cronologicos = {c["id"]: 0.0 for c in conceptos_cat}
-    conceptos_con_avance_periodo = []
-    mediciones_actual = []
-
-    for e in estimaciones_dash:
-        meds_e = get_mediciones(e["id"])
-        if e["id"] == estimacion_info["id"]:
-            mediciones_actual = meds_e
-            
-        meds_por_conc_e = {}
-        for m in meds_e:
-            c_id = m.get("id_concepto")
-            meds_por_conc_e[c_id] = meds_por_conc_e.get(c_id, 0.0) + float(m.get("cantidad_total") or 0.0)
-            
-        for c in conceptos_cat:
-            c_id = c["id"]
-            cant_periodo = meds_por_conc_e.get(c_id, 0.0)
-            acumulados_cronologicos[c_id] += cant_periodo
-            
-            if e["id"] == estimacion_info["id"] and cant_periodo > 0:
-                conceptos_con_avance_periodo.append({
-                    "id": c_id,
-                    "clave": c['clave'],
-                    "descripcion": c['descripcion'],
-                    "unidad": normalizar_unidad(c['unidad']),
-                    "cant_contratada": float(c.get('cantidad_contratada') or 0.0),
-                    "pu": float(c.get('precio_unitario') or 0.0),
-                    "cant_periodo": cant_periodo,
-                    "cant_acumulada": acumulados_cronologicos[c_id]
-                })
-
-    # 3. Pestaña Estimacion
-    ws_est = wb["Estimacion"]
-    fila_est = 14
-    for c_idx, c in enumerate(conceptos_con_avance_periodo, start=1):
-        set_cell_value(ws_est, 'A', fila_est, c_idx)
-        set_cell_value(ws_est, 'B', fila_est, c['descripcion'])
-        set_cell_value(ws_est, 'E', fila_est, c['unidad'])
-        set_cell_value(ws_est, 'G', fila_est, c['clave'])
-        set_cell_value(ws_est, 'H', fila_est, c['cant_contratada'])
-        set_cell_value(ws_est, 'I', fila_est, c['cant_acumulada'])
-        set_cell_value(ws_est, 'J', fila_est, c['cant_acumulada'] - c['cant_periodo'])
-        set_cell_value(ws_est, 'K', fila_est, c['cant_periodo'])
-        set_cell_value(ws_est, 'L', fila_est, c['pu'])
-        set_cell_value(ws_est, 'M', fila_est, c['cant_periodo'] * c['pu'])
-        fila_est += 1
-
-    # 4. Pestaña Generador
-    ws_gen = wb["Generador"]
-    fila_gen = 14 # Alineado para caer directamente en la zona de celdas libres
-    for c in conceptos_con_avance_periodo:
-        set_cell_value(ws_gen, 'A', fila_gen, c['clave'])
-        set_cell_value(ws_gen, 'B', fila_gen, c['descripcion'])
-        set_cell_value(ws_gen, 'J', fila_gen, c['unidad'])
-        # No ponemos cant_periodo total aquí porque el IMSS prefiere ver el desglose fila por fila
-        fila_gen += 1
-        
-        meds_conc = [m for m in mediciones_actual if m['id_concepto'] == c['id']]
-        for m in meds_conc:
-            set_cell_value(ws_gen, 'B', fila_gen, m.get('localizacion', ''))
-            set_cell_value(ws_gen, 'D', fila_gen, m.get('eje', ''))
-            set_cell_value(ws_gen, 'E', fila_gen, m.get('tramo', ''))
-            set_cell_value(ws_gen, 'F', fila_gen, float(m.get('ancho') or 0.0))
-            set_cell_value(ws_gen, 'G', fila_gen, float(m.get('largo') or 0.0))
-            set_cell_value(ws_gen, 'H', fila_gen, float(m.get('alto') or 0.0))
-            set_cell_value(ws_gen, 'I', fila_gen, float(m.get('piezas') or 1.0))
-            set_cell_value(ws_gen, 'J', fila_gen, c['unidad'])
-            set_cell_value(ws_gen, 'K', fila_gen, float(m.get('cantidad_total') or 0.0))
-            fila_gen += 1
-        fila_gen += 1
-
-    # 5. Croquis y Fotografías (Inyección binaria)
-    ws_croquis = wb["Croquis"]
-    ws_fotos = wb["Bit. Fotografica"]
-    fila_croquis = 8
-    fila_fotos = 8
-
-    for m in mediciones_actual:
-        c_ref = next((c for c in conceptos_cat if c['id'] == m['id_concepto']), {})
-        c_clave = c_ref.get('clave', 'S/C')
-        
-        if m.get('url_croquis'):
-            try:
-                resp = requests.get(m['url_croquis'], timeout=10)
-                if resp.status_code == 200:
-                    img_stream = io.BytesIO(resp.content)
-                    img = OpenpyxlImage(img_stream)
-                    img.width, img.height = 400, 300
-                    ws_croquis.add_image(img, f'B{fila_croquis}')
-                    set_cell_value(ws_croquis, 'A', fila_croquis, f"Concepto: {c_clave} - Loc: {m.get('localizacion','')}")
-                    fila_croquis += 18
-            except Exception:
-                pass
-                
-        if m.get('url_foto'):
-            try:
-                resp = requests.get(m['url_foto'], timeout=10)
-                if resp.status_code == 200:
-                    img_stream = io.BytesIO(resp.content)
-                    img = OpenpyxlImage(img_stream)
-                    img.width, img.height = 400, 300
-                    ws_fotos.add_image(img, f'B{fila_fotos}')
-                    set_cell_value(ws_fotos, 'A', fila_fotos, f"Concepto: {c_clave} - Loc: {m.get('localizacion','')}")
-                    fila_fotos += 18
-            except Exception:
-                pass
-
-    output = io.BytesIO()
-    wb.save(output)
-    output.seek(0)
-    return output.getvalue()
-
-
-# =============================================================
-# MOTOR DE GENERACIÓN DE REPORTE EJECUTIVO EN PDF
-# =============================================================
-@st.cache_data(show_spinner=False)
-def generar_pdf_resumen_ejecutivo(proy_info, monto_cont, monto_est, saldo_ejercer, pct_global, df_conceptos):
-    pdf_buffer = io.BytesIO()
-    doc = SimpleDocTemplate(
-        pdf_buffer,
-        pagesize=letter,
-        rightMargin=36,
-        leftMargin=36,
-        topMargin=36,
-        bottomMargin=36
-    )
-    story = []
-    styles = getSampleStyleSheet()
-
-    title_style = ParagraphStyle(
-        'DocTitle',
-        parent=styles['Heading1'],
-        fontSize=15,
-        leading=18,
-        textColor=colors.HexColor("#1A2530"),
-        spaceAfter=2,
-        fontName="Helvetica-Bold"
-    )
-    subtitle_style = ParagraphStyle(
-        'DocSubtitle',
-        parent=styles['Normal'],
-        fontSize=8,
-        leading=10,
-        textColor=colors.HexColor("#555555"),
-        spaceAfter=10
-    )
-    table_text = ParagraphStyle(
-        'TableText',
-        parent=styles['Normal'],
-        fontSize=7,
-        leading=9,
-        textColor=colors.HexColor("#222222")
-    )
-    table_head = ParagraphStyle(
-        'TableHead',
-        parent=styles['Normal'],
-        fontSize=7,
-        leading=9,
-        textColor=colors.white,
-        fontName="Helvetica-Bold"
-    )
-
-    story.append(Paragraph("ESTIMAPP | INFORME EJECUTIVO DE CONTROL PRESUPUESTAL", title_style))
-    story.append(Paragraph(f"Fecha de corte y emisión: {datetime.datetime.now().strftime('%d/%m/%Y %H:%M')} | Sistema Central de Estimaciones", subtitle_style))
-
-    # 1. Ficha técnica del proyecto
-    info_data = [
-        [
-            Paragraph("<b>Obra:</b>", table_text),
-            Paragraph(f"{proy_info.get('nombre_obra', 'N/D')}", table_text),
-            Paragraph("<b>Contrato N°:</b>", table_text),
-            Paragraph(f"{proy_info.get('contrato_no', 'S/N')}", table_text)
-        ],
-        [
-            Paragraph("<b>Ubicación:</b>", table_text),
-            Paragraph(f"{proy_info.get('ubicacion', 'N/D')}", table_text),
-            Paragraph("<b>Licitación:</b>", table_text),
-            Paragraph(f"{proy_info.get('concurso_no', 'S/N')}", table_text)
-        ],
-        [
-            Paragraph("<b>Contratista:</b>", table_text),
-            Paragraph(f"{proy_info.get('contratista', 'N/D')}", table_text),
-            Paragraph("<b>Unidad:</b>", table_text),
-            Paragraph(f"{proy_info.get('unidad', 'N/D')}", table_text)
-        ],
-        [
-            Paragraph("<b>Residente:</b>", table_text),
-            Paragraph(f"{proy_info.get('residente_obra', 'N/D')}", table_text),
-            Paragraph("<b>Alcance:</b>", table_text),
-            Paragraph(f"{proy_info.get('descripcion_sintetica', 'General')[:50]}...", table_text)
-        ]
-    ]
-    t_info = Table(info_data, colWidths=[65, 230, 75, 170])
-    t_info.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,-1), colors.HexColor("#F8FAFC")),
-        ('BOX', (0,0), (-1,-1), 1, colors.HexColor("#CBD5E1")),
-        ('INNERGRID', (0,0), (-1,-1), 0.5, colors.HexColor("#E2E8F0")),
-        ('TOPPADDING', (0,0), (-1,-1), 3),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 3),
-    ]))
-    story.append(t_info)
-    story.append(Spacer(1, 8))
-
-    # 2. Métricas Financieras (KPIs)
-    kpi_data = [
-        [
-            Paragraph(f"<para align=center><b>Monto Contratado Total</b><br/><font size=10 color='#1A2530'><b>${monto_cont:,.2f}</b></font></para>", table_text),
-            Paragraph(f"<para align=center><b>Monto Estimado Acumulado</b><br/><font size=10 color='#00875A'><b>${monto_est:,.2f}</b></font></para>", table_text),
-            Paragraph(f"<para align=center><b>Saldo por Ejercer</b><br/><font size=10 color='#D32F2F'><b>${saldo_ejercer:,.2f}</b></font></para>", table_text),
-            Paragraph(f"<para align=center><b>Avance Global</b><br/><font size=10 color='#0288D1'><b>{pct_global:.2f}%</b></font></para>", table_text)
-        ]
-    ]
-    t_kpi = Table(kpi_data, colWidths=[135, 135, 135, 135])
-    t_kpi.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,-1), colors.white),
-        ('BOX', (0,0), (-1,-1), 1.2, colors.HexColor("#00875A")),
-        ('INNERGRID', (0,0), (-1,-1), 0.5, colors.HexColor("#E2E8F0")),
-        ('TOPPADDING', (0,0), (-1,-1), 5),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 5),
-    ]))
-    story.append(t_kpi)
-    story.append(Spacer(1, 8))
-
-    # 3. Gráfica en memoria
-    fig, ax = plt.subplots(figsize=(7.2, 1.0), dpi=150)
-    cats = ['Balance Contractual']
-    ax.barh(cats, [monto_est], color='#00875A', height=0.45, label=f'Ejercido (${monto_est:,.2f} - {pct_global:.1f}%)')
-    ax.barh(cats, [saldo_ejercer], left=[monto_est], color='#CBD5E1', height=0.45, label=f'Saldo (${saldo_ejercer:,.2f})')
-    limite = max(monto_cont * 1.05, 1.0)
-    ax.set_xlim(0, limite)
-    ax.set_xlabel('Monto en MXN', fontsize=7)
-    ax.legend(loc='lower center', bbox_to_anchor=(0.5, 1.01), ncol=2, frameon=False, fontsize=7)
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    ax.spines['left'].set_visible(False)
-    ax.tick_params(axis='both', which='both', labelsize=7, left=False)
-    plt.tight_layout()
-
-    chart_buf = io.BytesIO()
-    plt.savefig(chart_buf, format='png', bbox_inches='tight')
-    plt.close(fig)
-    chart_buf.seek(0)
-    story.append(RLImage(chart_buf, width=540, height=75))
-    story.append(Spacer(1, 8))
-
-    # 4. Tabla consolidada de conceptos
-    table_rows = [
-        [
-            Paragraph("<para align=center>#</para>", table_head),
-            Paragraph("<para align=center>Clave</para>", table_head),
-            Paragraph("<para align=center>Und</para>", table_head),
-            Paragraph("<para align=center>Cant. Cont.</para>", table_head),
-            Paragraph("<para align=center>Cant. Est.</para>", table_head),
-            Paragraph("<para align=center>P.U. ($)</para>", table_head),
-            Paragraph("<para align=center>Importe Est. ($)</para>", table_head),
-            Paragraph("<para align=center>Saldo Fin. ($)</para>", table_head),
-            Paragraph("<para align=center>% Avance</para>", table_head),
-        ]
-    ]
-
-    for idx, row in df_conceptos.iterrows():
-        p_avance = float(row.get("% Avance", 0.0))
-        color_pct = "#D32F2F" if p_avance > 100.0 else "#00875A"
-        table_rows.append([
-            Paragraph(f"<para align=center>{idx+1}</para>", table_text),
-            Paragraph(f"{row.get('Clave', '')}", table_text),
-            Paragraph(f"<para align=center>{row.get('Unidad', '')}</para>", table_text),
-            Paragraph(f"<para align=right>{float(row.get('Cant. Contratada', 0)):,.2f}</para>", table_text),
-            Paragraph(f"<para align=right>{float(row.get('Cant. Acumulada', 0)):,.2f}</para>", table_text),
-            Paragraph(f"<para align=right>${float(row.get('P.U. ($)', 0)):,.2f}</para>", table_text),
-            Paragraph(f"<para align=right>${float(row.get('Importe Acumulado ($)', 0)):,.2f}</para>", table_text),
-            Paragraph(f"<para align=right>${float(row.get('Saldo Financiero ($)', 0)):,.2f}</para>", table_text),
-            Paragraph(f"<para align=center><font color='{color_pct}'><b>{p_avance:.1f}%</b></font></para>", table_text),
-        ])
-
-    t_table = Table(table_rows, colWidths=[23, 72, 35, 65, 65, 60, 75, 75, 70], repeatRows=1)
-    t_table.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1A2530")),
-        ('INNERGRID', (0,0), (-1,-1), 0.5, colors.HexColor("#E2E8F0")),
-        ('BOX', (0,0), (-1,-1), 1, colors.HexColor("#94A3B8")),
-        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-        ('TOPPADDING', (0,0), (-1,-1), 2.5),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 2.5),
-    ]))
-    story.append(t_table)
-    story.append(Spacer(1, 15))
-
-    # 5. Cuadro oficial de firmas
-    residente_nom = proy_info.get('residente_obra') or 'Supervisión de Obra'
-    contratista_nom = proy_info.get('contratista') or 'Contratista'
-    sig_data = [
-        [
-            Paragraph(f"<para align=center>____________________________________<br/><b>{residente_nom}</b><br/>Residente de Obra / Supervisión</para>", table_text),
-            Paragraph(f"<para align=center>____________________________________<br/><b>{contratista_nom}</b><br/>Empresa Contratista</para>", table_text)
-        ]
-    ]
-    t_sig = Table(sig_data, colWidths=[270, 270])
-    t_sig.setStyle(TableStyle([
-        ('TOPPADDING', (0,0), (-1,-1), 15),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 5),
-    ]))
-    story.append(KeepTogether(t_sig))
-
-    doc.build(story)
-    return pdf_buffer.getvalue()
-
-keys = ["del_proy_counter", "del_conc_counter", "del_est_counter", "del_med_counter", "cap_counter", "dim_counter", "bib_del_counter", "up_bib_key", "up_proy_key", "ms_lote_key", "new_cat_key"]
+keys = ["del_proy_counter", "del_conc_counter", "del_est_counter", "del_med_counter", "cap_counter", "dim_counter", "bib_del_counter", "up_bib_key", "up_proy_key", "ms_lote_key"]
 for k in keys:
     if k not in st.session_state: st.session_state[k] = 0
 
@@ -555,7 +172,7 @@ lista_proyectos = get_proyectos()
 proyectos_dict = {p["nombre_obra"]: p["id"] for p in lista_proyectos} if lista_proyectos else {}
 
 # -------------------------------------------------------------
-# TAB 1: CONTROL PRESUPUESTAL (DASHBOARD + REPORTE PDF EJECUTIVO)
+# TAB 1: CONTROL PRESUPUESTAL (DASHBOARD)
 # -------------------------------------------------------------
 with tab_dashboard:
     st.subheader("Control Presupuestal y Balance Contractual")
@@ -563,8 +180,6 @@ with tab_dashboard:
     else:
         proy_sel_dash = st.selectbox("Proyecto a Auditar", list(proyectos_dict.keys()), key="dash_proy")
         id_proy_dash = proyectos_dict[proy_sel_dash]
-        proy_obj_actual = next((p for p in lista_proyectos if p["id"] == id_proy_dash), {})
-
         conceptos_dash = get_conceptos(id_proy_dash)
         estimaciones_dash = get_estimaciones(id_proy_dash)
 
@@ -648,27 +263,7 @@ with tab_dashboard:
                 df_dash.insert(3, "#", range(1, len(df_dash) + 1))
                 df_dash = df_dash.drop(columns=["_sort_est", "_sort_avance"])
 
-                # Botón exclusivo de descarga de Resumen Ejecutivo en PDF
-                col_titulo_rep, col_btn_pdf = st.columns([3, 1])
-                with col_titulo_rep:
-                    st.markdown("##### Desglose por Estimación y Concepto (Auditoría Integral de Avance):")
-                with col_btn_pdf:
-                    pdf_bytes = generar_pdf_resumen_ejecutivo(
-                        proy_info=proy_obj_actual,
-                        monto_cont=monto_contratado_total,
-                        monto_est=monto_estimado_global,
-                        saldo_ejercer=saldo_por_ejercer,
-                        pct_global=pct_global,
-                        df_conceptos=df_dash
-                    )
-                    st.download_button(
-                        label="📄 Exportar Resumen Ejecutivo (PDF)",
-                        data=pdf_bytes,
-                        file_name=f"Resumen_Ejecutivo_{proy_obj_actual.get('contrato_no', 'Obra')}.pdf",
-                        mime="application/pdf",
-                        use_container_width=True
-                    )
-
+                st.markdown("##### Desglose por Estimación y Concepto (Auditoría Integral de Avance):")
                 st.dataframe(
                     df_dash,
                     column_config={
@@ -877,7 +472,7 @@ with tab_captura:
 
                 st.metric("Total Estimado en el Periodo (Sin I.V.A.)", f"${total_periodo_acum:,.2f} MXN")
 
-                with st.expander("🗑️️ Eliminar Mediciones (Borrado Masivo)"):
+                with st.expander("🗑️ Eliminar Mediciones (Borrado Masivo)"):
                     meds_a_borrar_labels = st.multiselect("Seleccionar mediciones a remover:", list(meds_borrar_dict.keys()), key=f"sel_med_del_{st.session_state.del_med_counter}")
                     borrar_todas_meds = st.checkbox("⚠️ Selecciona para eliminar todas las mediciones mostradas en la tabla.", key=f"chk_todas_meds_{st.session_state.del_med_counter}")
                     if borrar_todas_meds: meds_a_borrar_labels = list(meds_borrar_dict.keys())
@@ -983,64 +578,6 @@ with tab_estimaciones:
                     get_estimaciones.clear()
                     st.toast("✅ Estimación actualizada.")
                     st.rerun()
-
-            # --- MODULO DE EXPORTACIÓN OFICIAL EXCEL (INYECCIÓN PURA) ---
-            st.markdown("---")
-            st.markdown("##### 📥 Exportación Oficial (Formatos Institucionales)")
-            col_exp_1, col_exp_2, col_exp_3 = st.columns([2, 1, 1])
-            
-            est_a_descargar = col_exp_1.selectbox(
-                "Seleccionar Estimación a Exportar:", 
-                [f"Estimación #{e['num_periodo']} (Del {e['periodo_inicio']} al {e['periodo_fin']})" for e in estimaciones_proyecto]
-            )
-            formato_institucion = col_exp_2.selectbox("Plantilla Institucional:", ["IMSS", "Poder Judicial de la Federación"])
-            proy_obj_actual = next((p for p in lista_proyectos if p["id"] == id_proy_est), {})
-            
-            with col_exp_3:
-                # Div compensatorio para que el botón se alinee con los selectores
-                st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
-                btn_generar_excel = st.button("Preparar Archivo .XLSX", type="primary", use_container_width=True)
-
-            if btn_generar_excel:
-                idx_est_sel = [f"Estimación #{e['num_periodo']} (Del {e['periodo_inicio']} al {e['periodo_fin']})" for e in estimaciones_proyecto].index(est_a_descargar)
-                est_obj_actual = estimaciones_proyecto[idx_est_sel]
-                
-                if formato_institucion == "IMSS":
-                    with st.spinner("Conectando con Supabase e inyectando datos en la plantilla oficial..."):
-                        try:
-                            # 1. Recuperamos todo el catálogo de este proyecto
-                            conceptos_cat = get_conceptos(id_proy_est)
-                            
-                            # 2. Descargamos la plantilla limpia de Supabase
-                            plantilla_bytes = descargar_plantilla_supabase("plantillas", "plantilla_maestra_estimacion_imss.xlsx")
-                            
-                            # 3. Lanzamos el inyector optimizado
-                            xlsx_generado = inyectar_datos_excel_imss(
-                                plantilla_bytes=plantilla_bytes,
-                                proy_info=proy_obj_actual,
-                                estimacion_info=est_obj_actual,
-                                conceptos_cat=conceptos_cat,
-                                estimaciones_dash=estimaciones_proyecto
-                            )
-                            
-                            # 4. Guardamos el buffer binario localmente en session state
-                            st.session_state["xls_buffer"] = xlsx_generado
-                            st.session_state["xls_name"] = f"Estimacion_{est_obj_actual['num_periodo']}_{proy_obj_actual.get('contrato_no', 'IMSS')}.xlsx"
-                            st.success("✅ Archivo procesado y listo. Haz clic en el botón de abajo para descargarlo.")
-                        except Exception as e:
-                            st.error(f"Error al generar el formato: {e}")
-                else:
-                    st.info("🚧 La plantilla para el Poder Judicial de la Federación se encuentra en proceso de homologación.")
-
-            # Si el archivo está en memoria, revelamos el botón nativo de descarga
-            if st.session_state.get("xls_buffer"):
-                st.download_button(
-                    label=f"⬇️ Descargar {st.session_state['xls_name']}",
-                    data=st.session_state["xls_buffer"],
-                    file_name=st.session_state["xls_name"],
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True
-                )
 
 # -------------------------------------------------------------
 # TAB 4: CATÁLOGO DEL PROYECTO
@@ -1206,7 +743,7 @@ with tab_catalogo:
                     st.rerun()
 
 # -------------------------------------------------------------
-# TAB 5: BIBLIOTECA MAESTRA GLOBAL
+# TAB 5: BIBLIOTECA MAESTRA GLOBAL (SIMETRÍA Y CALLBACKS)
 # -------------------------------------------------------------
 with tab_biblioteca:
     st.subheader("📖 Biblioteca Maestra de Conceptos (Global)")

@@ -2,3 +2,7 @@ streamlit
 supabase
 pandas
 openpyxl
+reportlab
+matplotlib
+Pillow
+requests

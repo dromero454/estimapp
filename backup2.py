@@ -13,11 +13,6 @@ from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image as RLImage, KeepTogether
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 
-# Librería para inyección de Excel Institucional e imágenes
-import openpyxl
-from openpyxl.drawing.image import Image as OpenpyxlImage
-import requests
-
 st.set_page_config(page_title="Estimapp", page_icon="🏗", layout="wide")
 
 # Conexión con Supabase
@@ -170,185 +165,8 @@ def eliminar_categoria_callback():
             pass
 
 # =============================================================
-# MOTOR DE GENERACIÓN DE EXCEL INSTITUCIONAL CON OPENPYXL
-# =============================================================
-def descargar_plantilla_supabase(bucket_name, file_name):
-    url_plantilla = supabase.storage.from_(bucket_name).get_public_url(file_name)
-    response = requests.get(url_plantilla)
-    if response.status_code == 200:
-        return io.BytesIO(response.content)
-    else:
-        raise Exception(f"No se pudo descargar la plantilla de {url_plantilla}")
-
-def set_cell_value(ws, col, row, value):
-    """
-    Función francotiradora: Escribe el valor en la celda indicada.
-    Si la celda pertenece a un bloque combinado (MergedCell),
-    busca la coordenada principal (top-left) y escribe el dato ahí para evitar errores.
-    """
-    coord = f"{col}{row}"
-    cell = ws[coord]
-    
-    if type(cell).__name__ == 'MergedCell':
-        for rng in ws.merged_cells.ranges:
-            if cell.row >= rng.min_row and cell.row <= rng.max_row and cell.column >= rng.min_col and cell.column <= rng.max_col:
-                ws.cell(row=rng.min_row, column=rng.min_col).value = value
-                break
-    else:
-        cell.value = value
-
-def inyectar_datos_excel_imss(plantilla_bytes, proy_info, estimacion_info, conceptos_cat, estimaciones_dash):
-    wb = openpyxl.load_workbook(plantilla_bytes)
-    
-    # 1. Pestaña DATOS
-    monto_contratado_total = sum(float(c.get("cantidad_contratada") or 0.0) * float(c.get("precio_unitario") or 0.0) for c in conceptos_cat)
-    ws_datos = wb["DATOS"]
-    set_cell_value(ws_datos, 'B', 2, proy_info.get('nombre_obra', ''))
-    set_cell_value(ws_datos, 'B', 4, proy_info.get('descripcion_sintetica', ''))
-    set_cell_value(ws_datos, 'B', 6, proy_info.get('ubicacion', ''))
-    set_cell_value(ws_datos, 'B', 8, proy_info.get('unidad', ''))
-    set_cell_value(ws_datos, 'B', 12, proy_info.get('contratista', ''))
-    set_cell_value(ws_datos, 'B', 14, proy_info.get('residente_obra', ''))
-    set_cell_value(ws_datos, 'B', 16, proy_info.get('contrato_no', ''))
-    set_cell_value(ws_datos, 'B', 20, f"DEL {estimacion_info.get('periodo_inicio', '')} AL {estimacion_info.get('periodo_fin', '')}")
-    set_cell_value(ws_datos, 'B', 23, datetime.datetime.now().strftime("%d/%m/%Y"))
-    set_cell_value(ws_datos, 'B', 31, f"{estimacion_info.get('num_periodo', 1)} ({estimacion_info.get('estado', 'NORMAL').upper()})")
-    set_cell_value(ws_datos, 'B', 35, monto_contratado_total)
-
-    # 2. Pestaña CATALOGO
-    ws_cat = wb["CATALOGO"]
-    fila_cat = 14 # Ajustado para saltar los encabezados de la plantilla vacía
-    for c in conceptos_cat:
-        set_cell_value(ws_cat, 'A', fila_cat, c['clave'])
-        set_cell_value(ws_cat, 'B', fila_cat, c['descripcion'])
-        set_cell_value(ws_cat, 'C', fila_cat, normalizar_unidad(c['unidad']))
-        cant = float(c.get('cantidad_contratada') or 0.0)
-        pu = float(c.get('precio_unitario') or 0.0)
-        set_cell_value(ws_cat, 'D', fila_cat, cant)
-        set_cell_value(ws_cat, 'E', fila_cat, pu)
-        set_cell_value(ws_cat, 'F', fila_cat, "") 
-        set_cell_value(ws_cat, 'G', fila_cat, cant * pu)
-        set_cell_value(ws_cat, 'H', fila_cat, (cant * pu / monto_contratado_total) if monto_contratado_total > 0 else 0)
-        fila_cat += 1
-
-    # Pre-cálculos cruzados para Estimacion y Generador
-    acumulados_cronologicos = {c["id"]: 0.0 for c in conceptos_cat}
-    conceptos_con_avance_periodo = []
-    mediciones_actual = []
-
-    for e in estimaciones_dash:
-        meds_e = get_mediciones(e["id"])
-        if e["id"] == estimacion_info["id"]:
-            mediciones_actual = meds_e
-            
-        meds_por_conc_e = {}
-        for m in meds_e:
-            c_id = m.get("id_concepto")
-            meds_por_conc_e[c_id] = meds_por_conc_e.get(c_id, 0.0) + float(m.get("cantidad_total") or 0.0)
-            
-        for c in conceptos_cat:
-            c_id = c["id"]
-            cant_periodo = meds_por_conc_e.get(c_id, 0.0)
-            acumulados_cronologicos[c_id] += cant_periodo
-            
-            if e["id"] == estimacion_info["id"] and cant_periodo > 0:
-                conceptos_con_avance_periodo.append({
-                    "id": c_id,
-                    "clave": c['clave'],
-                    "descripcion": c['descripcion'],
-                    "unidad": normalizar_unidad(c['unidad']),
-                    "cant_contratada": float(c.get('cantidad_contratada') or 0.0),
-                    "pu": float(c.get('precio_unitario') or 0.0),
-                    "cant_periodo": cant_periodo,
-                    "cant_acumulada": acumulados_cronologicos[c_id]
-                })
-
-    # 3. Pestaña Estimacion
-    ws_est = wb["Estimacion"]
-    fila_est = 14
-    for c_idx, c in enumerate(conceptos_con_avance_periodo, start=1):
-        set_cell_value(ws_est, 'A', fila_est, c_idx)
-        set_cell_value(ws_est, 'B', fila_est, c['descripcion'])
-        set_cell_value(ws_est, 'E', fila_est, c['unidad'])
-        set_cell_value(ws_est, 'G', fila_est, c['clave'])
-        set_cell_value(ws_est, 'H', fila_est, c['cant_contratada'])
-        set_cell_value(ws_est, 'I', fila_est, c['cant_acumulada'])
-        set_cell_value(ws_est, 'J', fila_est, c['cant_acumulada'] - c['cant_periodo'])
-        set_cell_value(ws_est, 'K', fila_est, c['cant_periodo'])
-        set_cell_value(ws_est, 'L', fila_est, c['pu'])
-        set_cell_value(ws_est, 'M', fila_est, c['cant_periodo'] * c['pu'])
-        fila_est += 1
-
-    # 4. Pestaña Generador
-    ws_gen = wb["Generador"]
-    fila_gen = 14 # Alineado para caer directamente en la zona de celdas libres
-    for c in conceptos_con_avance_periodo:
-        set_cell_value(ws_gen, 'A', fila_gen, c['clave'])
-        set_cell_value(ws_gen, 'B', fila_gen, c['descripcion'])
-        set_cell_value(ws_gen, 'J', fila_gen, c['unidad'])
-        # No ponemos cant_periodo total aquí porque el IMSS prefiere ver el desglose fila por fila
-        fila_gen += 1
-        
-        meds_conc = [m for m in mediciones_actual if m['id_concepto'] == c['id']]
-        for m in meds_conc:
-            set_cell_value(ws_gen, 'B', fila_gen, m.get('localizacion', ''))
-            set_cell_value(ws_gen, 'D', fila_gen, m.get('eje', ''))
-            set_cell_value(ws_gen, 'E', fila_gen, m.get('tramo', ''))
-            set_cell_value(ws_gen, 'F', fila_gen, float(m.get('ancho') or 0.0))
-            set_cell_value(ws_gen, 'G', fila_gen, float(m.get('largo') or 0.0))
-            set_cell_value(ws_gen, 'H', fila_gen, float(m.get('alto') or 0.0))
-            set_cell_value(ws_gen, 'I', fila_gen, float(m.get('piezas') or 1.0))
-            set_cell_value(ws_gen, 'J', fila_gen, c['unidad'])
-            set_cell_value(ws_gen, 'K', fila_gen, float(m.get('cantidad_total') or 0.0))
-            fila_gen += 1
-        fila_gen += 1
-
-    # 5. Croquis y Fotografías (Inyección binaria)
-    ws_croquis = wb["Croquis"]
-    ws_fotos = wb["Bit. Fotografica"]
-    fila_croquis = 8
-    fila_fotos = 8
-
-    for m in mediciones_actual:
-        c_ref = next((c for c in conceptos_cat if c['id'] == m['id_concepto']), {})
-        c_clave = c_ref.get('clave', 'S/C')
-        
-        if m.get('url_croquis'):
-            try:
-                resp = requests.get(m['url_croquis'], timeout=10)
-                if resp.status_code == 200:
-                    img_stream = io.BytesIO(resp.content)
-                    img = OpenpyxlImage(img_stream)
-                    img.width, img.height = 400, 300
-                    ws_croquis.add_image(img, f'B{fila_croquis}')
-                    set_cell_value(ws_croquis, 'A', fila_croquis, f"Concepto: {c_clave} - Loc: {m.get('localizacion','')}")
-                    fila_croquis += 18
-            except Exception:
-                pass
-                
-        if m.get('url_foto'):
-            try:
-                resp = requests.get(m['url_foto'], timeout=10)
-                if resp.status_code == 200:
-                    img_stream = io.BytesIO(resp.content)
-                    img = OpenpyxlImage(img_stream)
-                    img.width, img.height = 400, 300
-                    ws_fotos.add_image(img, f'B{fila_fotos}')
-                    set_cell_value(ws_fotos, 'A', fila_fotos, f"Concepto: {c_clave} - Loc: {m.get('localizacion','')}")
-                    fila_fotos += 18
-            except Exception:
-                pass
-
-    output = io.BytesIO()
-    wb.save(output)
-    output.seek(0)
-    return output.getvalue()
-
-
-# =============================================================
 # MOTOR DE GENERACIÓN DE REPORTE EJECUTIVO EN PDF
 # =============================================================
-@st.cache_data(show_spinner=False)
 def generar_pdf_resumen_ejecutivo(proy_info, monto_cont, monto_est, saldo_ejercer, pct_global, df_conceptos):
     pdf_buffer = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -508,7 +326,7 @@ def generar_pdf_resumen_ejecutivo(proy_info, monto_cont, monto_est, saldo_ejerce
             Paragraph(f"<para align=center><font color='{color_pct}'><b>{p_avance:.1f}%</b></font></para>", table_text),
         ])
 
-    t_table = Table(table_rows, colWidths=[23, 72, 35, 65, 65, 60, 75, 75, 70], repeatRows=1)
+    t_table = Table(table_rows, colWidths=[18, 77, 35, 65, 65, 60, 75, 75, 70], repeatRows=1)
     t_table.setStyle(TableStyle([
         ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1A2530")),
         ('INNERGRID', (0,0), (-1,-1), 0.5, colors.HexColor("#E2E8F0")),
@@ -741,7 +559,7 @@ with tab_captura:
             elif es_m3km:
                 label_largo, label_ancho, label_alto, des_largo, des_ancho, des_alto, des_kg, des_litros, des_horas = "Distancia (km)", "Volumen (m³)", "Alto (m)", False, False, True, True, True, True
             elif es_m3: label_largo, label_ancho, label_alto, des_largo, des_ancho, des_alto, des_kg, des_litros, des_horas = "Largo (m)", "Ancho (m)", "Alto (m)", False, False, False, True, True, True
-            elif es_kg: label_largo, label_ancho, label_alto, des_largo, des_ancho, des_alto, des_kg, des_litros, des_horas = "Largo (m)", "Ancho (m)", "Alto (m)", False, True, True, False, True, True
+            elif es_kg: label_largo, label_ancho, label_alto, des_largo, des_ancho, des_alto, des_kg, des_litros, des_horas = "Largo (m)", "Ancho (m)", "Alto (m)", False, False, True, False, True, True
             elif es_lt: label_largo, label_ancho, label_alto, des_largo, des_ancho, des_alto, des_kg, des_litros, des_horas = "Largo (m)", "Ancho (m)", "Alto (m)", True, True, True, True, False, True
             elif es_h: label_largo, label_ancho, label_alto, des_largo, des_ancho, des_alto, des_kg, des_litros, des_horas = "Largo (m)", "Ancho (m)", "Alto (m)", True, True, True, True, True, False
             elif es_lin: label_largo, label_ancho, label_alto, des_largo, des_ancho, des_alto, des_kg, des_litros, des_horas = "Largo (m)", "Ancho (m)", "Alto (m)", False, True, True, True, True, True
@@ -877,7 +695,7 @@ with tab_captura:
 
                 st.metric("Total Estimado en el Periodo (Sin I.V.A.)", f"${total_periodo_acum:,.2f} MXN")
 
-                with st.expander("🗑️️ Eliminar Mediciones (Borrado Masivo)"):
+                with st.expander("🗑️ Eliminar Mediciones (Borrado Masivo)"):
                     meds_a_borrar_labels = st.multiselect("Seleccionar mediciones a remover:", list(meds_borrar_dict.keys()), key=f"sel_med_del_{st.session_state.del_med_counter}")
                     borrar_todas_meds = st.checkbox("⚠️ Selecciona para eliminar todas las mediciones mostradas en la tabla.", key=f"chk_todas_meds_{st.session_state.del_med_counter}")
                     if borrar_todas_meds: meds_a_borrar_labels = list(meds_borrar_dict.keys())
@@ -983,64 +801,6 @@ with tab_estimaciones:
                     get_estimaciones.clear()
                     st.toast("✅ Estimación actualizada.")
                     st.rerun()
-
-            # --- MODULO DE EXPORTACIÓN OFICIAL EXCEL (INYECCIÓN PURA) ---
-            st.markdown("---")
-            st.markdown("##### 📥 Exportación Oficial (Formatos Institucionales)")
-            col_exp_1, col_exp_2, col_exp_3 = st.columns([2, 1, 1])
-            
-            est_a_descargar = col_exp_1.selectbox(
-                "Seleccionar Estimación a Exportar:", 
-                [f"Estimación #{e['num_periodo']} (Del {e['periodo_inicio']} al {e['periodo_fin']})" for e in estimaciones_proyecto]
-            )
-            formato_institucion = col_exp_2.selectbox("Plantilla Institucional:", ["IMSS", "Poder Judicial de la Federación"])
-            proy_obj_actual = next((p for p in lista_proyectos if p["id"] == id_proy_est), {})
-            
-            with col_exp_3:
-                # Div compensatorio para que el botón se alinee con los selectores
-                st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
-                btn_generar_excel = st.button("Preparar Archivo .XLSX", type="primary", use_container_width=True)
-
-            if btn_generar_excel:
-                idx_est_sel = [f"Estimación #{e['num_periodo']} (Del {e['periodo_inicio']} al {e['periodo_fin']})" for e in estimaciones_proyecto].index(est_a_descargar)
-                est_obj_actual = estimaciones_proyecto[idx_est_sel]
-                
-                if formato_institucion == "IMSS":
-                    with st.spinner("Conectando con Supabase e inyectando datos en la plantilla oficial..."):
-                        try:
-                            # 1. Recuperamos todo el catálogo de este proyecto
-                            conceptos_cat = get_conceptos(id_proy_est)
-                            
-                            # 2. Descargamos la plantilla limpia de Supabase
-                            plantilla_bytes = descargar_plantilla_supabase("plantillas", "plantilla_maestra_estimacion_imss.xlsx")
-                            
-                            # 3. Lanzamos el inyector optimizado
-                            xlsx_generado = inyectar_datos_excel_imss(
-                                plantilla_bytes=plantilla_bytes,
-                                proy_info=proy_obj_actual,
-                                estimacion_info=est_obj_actual,
-                                conceptos_cat=conceptos_cat,
-                                estimaciones_dash=estimaciones_proyecto
-                            )
-                            
-                            # 4. Guardamos el buffer binario localmente en session state
-                            st.session_state["xls_buffer"] = xlsx_generado
-                            st.session_state["xls_name"] = f"Estimacion_{est_obj_actual['num_periodo']}_{proy_obj_actual.get('contrato_no', 'IMSS')}.xlsx"
-                            st.success("✅ Archivo procesado y listo. Haz clic en el botón de abajo para descargarlo.")
-                        except Exception as e:
-                            st.error(f"Error al generar el formato: {e}")
-                else:
-                    st.info("🚧 La plantilla para el Poder Judicial de la Federación se encuentra en proceso de homologación.")
-
-            # Si el archivo está en memoria, revelamos el botón nativo de descarga
-            if st.session_state.get("xls_buffer"):
-                st.download_button(
-                    label=f"⬇️ Descargar {st.session_state['xls_name']}",
-                    data=st.session_state["xls_buffer"],
-                    file_name=st.session_state["xls_name"],
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True
-                )
 
 # -------------------------------------------------------------
 # TAB 4: CATÁLOGO DEL PROYECTO
