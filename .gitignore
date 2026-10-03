@@ -1,6 +1,31 @@
+# Entorno virtual de Python
 venv/
+ENV/
+env/
+
+# Secretos y credenciales sensibles (NUNCA subir a control de versiones)
 .streamlit/secrets.toml
+.agents/mcp_config.json
+*.env
+*.pem
+
+# Archivos compilados y cachés de ejecución
 __pycache__/
-*.pyc
-*.xlsx
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# Respaldos locales históricos y temporales
 .archive/
+*.bak
+*.tmp
+
+# Archivos Excel dinámicos (se preservan las plantillas oficiales de test_files)
+*.xlsx
+!test_files/*.xlsx
+
+# Metadatos de sistema operativo
+.DS_Store
+Thumbs.db
+desktop.ini

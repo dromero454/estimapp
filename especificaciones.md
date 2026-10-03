@@ -6,8 +6,8 @@ Este documento describe la arquitectura técnica, modelo de datos, estructura de
 
 ## 1. Entorno de Ejecución y Dependencias
 - **Entorno Virtual**: `venv` en la raíz del proyecto.
-  - Activación (Bash / Git Bash): `source venv/Scripts/activate`
-  - Activación (PowerShell / CMD): `venv\Scripts\activate`
+  - Activación (Git Bash / POSIX): `source venv/Scripts/activate`
+  - Activación (CMD / PowerShell): `venv\Scripts\activate`
 - **Gestor de Paquetes**: `requirements.txt`.
   - Dependencias principales: `streamlit`, `supabase`, `pandas`, `openpyxl`, `reportlab`, `matplotlib`, `pillow`, `requests`.
 - **Ejecución Local**: `streamlit run app.py`
@@ -18,63 +18,63 @@ Este documento describe la arquitectura técnica, modelo de datos, estructura de
 
 ```text
 estimapp/
-├── .archive/               # Respaldo local de versiones históricas (ignorado en Git).
-├── .streamlit/             # Configuración de entorno y secretos locales (secrets.toml).
-├── modulos/                # Lógica de negocio y backend desacoplado.
-│   ├── __init__.py         # Inicializador de paquete Python.
-│   ├── auth_engine.py      # Autenticación, tarjetas de login y registro.
-│   ├── db_engine.py        # Consultas a Supabase, caché reactiva y utilidades.
-│   ├── excel_engine.py     # Generación e inyección binaria en plantillas Excel oficiales.
-│   └── pdf_engine.py       # Compilación de resumen ejecutivo en PDF (ReportLab).
-├── test_files/             # Plantillas base oficiales preparadas para exportación Excel.
-├── AGENTS.md               # Arnés de reglas de operación y restricciones agénticas.
-├── especificaciones.md     # Documento maestro de arquitectura y datos (este archivo).
-├── app.py                  # Frontend orquestador de Streamlit (6 tabs principales).
-├── requirements.txt        # Dependencias fijas de Python.
-└── .gitignore              # Exclusiones de control de versiones.
+├── .agents/                        # Configuración de agentes, herramientas y skills locales
+│   └── skills/                     # Directrices canónicas de desarrollo
+│       ├── developing-with-streamlit/       # Reglas oficiales de Streamlit
+│       ├── supabase/                        # Directrices oficiales de Supabase
+│       └── supabase-postgres-best-practices/# Mejores prácticas de base de datos PostgreSQL
+├── .archive/                       # Respaldo local de versiones históricas (ignorado en Git).
+├── .streamlit/                     # Configuración de entorno y secretos locales (secrets.toml).
+├── modulos/                        # Lógica de negocio y backend desacoplado.
+│   ├── __init__.py                 # Inicializador de paquete Python.
+│   ├── auth_engine.py              # Autenticación, tarjetas de login y registro.
+│   ├── db_engine.py                # Consultas a Supabase, caché reactiva y utilidades.
+│   ├── excel_engine.py             # Inyección binaria en plantillas Excel oficiales (OpenPyXL).
+│   └── pdf_engine.py               # Compilación de resumen ejecutivo en PDF (ReportLab).
+├── test_files/                     # Plantillas maestras base oficiales para exportación Excel.
+│   ├── plantilla_maestra_estimacion_imss.xlsx
+│   └── plantilla_maestra_estimacion_pjf.xlsx
+├── AGENTS.md                       # Arnés de reglas operativas y restricciones agénticas.
+├── especificaciones.md             # Documento maestro de arquitectura y datos (este archivo).
+├── app.py                          # Frontend orquestador de Streamlit (6 tabs principales).
+├── requirements.txt                # Dependencias fijas de Python.
+└── .gitignore                      # Exclusiones de control de versiones.
 ```
-
-### Detalle de Carpetas Especiales
-- **`.archive/`**: Contiene archivos de respaldo históricos (`backup*.py`). Está ignorado en Git para evitar ruido semántico e indexación innecesaria en agentes.
-- **`.streamlit/`**: Contiene `secrets.toml` con las variables de entorno de Supabase (`SUPABASE_URL` y `SUPABASE_KEY`). **Nunca se comitea en Git**.
-- **`test_files/`**: Carpeta de trabajo que resguarda las plantillas maestras oficiales en formato `.xlsx` utilizadas por `modulos/excel_engine.py`:
-  - `plantilla_maestra_estimacion_imss.xlsx`
-  - `plantilla_maestra_estimacion_pjf.xlsx`
 
 ---
 
 ## 3. Infraestructura Cloud (Supabase)
 
-### 3.1 Base de Datos (PostgreSQL en Supabase)
-La base de datos relacional opera sobre Supabase Cloud bajo el esquema `public`. Consta de las siguientes tablas:
+### 3.1 Servidor MCP (Model Context Protocol)
+El entorno dispone de conexión activa con el servidor MCP de Supabase (`supabase-db`), otorgando al agente 20 herramientas de inspección y administración de base de datos mediante OAuth. El agente debe usar estas herramientas para verificar constraints, índices y tablas en tiempo real antes de sugerir o aplicar migraciones.
+
+### 3.2 Esquema Relacional (PostgreSQL en Supabase)
+El sistema opera sobre el esquema `public` con las siguientes tablas:
 
 1. **`instituciones`**:
    - Catálogo de dependencias gubernamentales y clientes (IMSS, PJF, SEDENA, etc.).
-   - Campos: `id` (BIGSERIAL PK), `nombre` (TEXT NOT NULL), `user_id` (UUID FK a auth.users), `created_at` (TIMESTAMPTZ).
+   - Columnas: `id` (BIGSERIAL PK), `nombre` (TEXT NOT NULL), `user_id` (UUID FK a auth.users), `created_at` (TIMESTAMPTZ).
 2. **`biblioteca_conceptos`**:
    - Tabulador maestro de precios de referencia e insumos de obra.
-   - Campos: `id` (BIGSERIAL PK), `user_id` (UUID), `institucion` (TEXT), `especialidad` (TEXT), `categoria` (TEXT), `clave` (TEXT), `descripcion` (TEXT), `unidad` (TEXT), `precio_referencial` (NUMERIC).
+   - Columnas: `id` (BIGSERIAL PK), `user_id` (UUID), `institucion` (TEXT), `especialidad` (TEXT), `categoria` (TEXT), `clave` (TEXT), `descripcion` (TEXT), `unidad` (TEXT), `precio_referencial` (NUMERIC).
 3. **`proyectos`**:
    - Contratos de obra dados de alta por cada usuario/empresa.
-   - Campos: `id` (UUID/BIGINT PK), `user_id` (UUID), `nombre_obra` (TEXT), `descripcion_sintetica` (TEXT), `ubicacion` (TEXT), `unidad` (TEXT), `contrato_no` (TEXT), `concurso_no` (TEXT), `contratista` (TEXT), `residente_obra` (TEXT).
+   - Columnas: `id` (UUID/BIGINT PK), `user_id` (UUID), `nombre_obra` (TEXT), `descripcion_sintetica` (TEXT), `ubicacion` (TEXT), `unidad` (TEXT), `contrato_no` (TEXT), `concurso_no` (TEXT), `contratista` (TEXT), `residente_obra` (TEXT).
 4. **`catalogo_conceptos`**:
    - Presupuesto oficial contratado específico para un proyecto. Son copias desacopladas de la biblioteca o conceptos extraordinarios.
-   - Campos: `id` (BIGINT PK), `id_proyecto` (FK a proyectos), `especialidad` (TEXT), `categoria` (TEXT), `clave` (TEXT), `descripcion` (TEXT), `unidad` (TEXT), `cantidad_contratada` (NUMERIC), `precio_unitario` (NUMERIC).
+   - Columnas: `id` (BIGINT PK), `id_proyecto` (FK a proyectos), `especialidad` (TEXT), `categoria` (TEXT), `clave` (TEXT), `descripcion` (TEXT), `unidad` (TEXT), `cantidad_contratada` (NUMERIC), `precio_unitario` (NUMERIC).
 5. **`estimaciones`**:
    - Cortes temporales de avance de obra (Estimación 1, 2, 3...).
-   - Campos: `id` (BIGINT PK), `id_proyecto` (FK a proyectos), `num_periodo` (INT), `periodo_inicio` (DATE), `periodo_fin` (DATE), `estado` (`borrador`, `en_revision`, `aprobada`).
+   - Columnas: `id` (BIGINT PK), `id_proyecto` (FK a proyectos), `num_periodo` (INT), `periodo_inicio` (DATE), `periodo_fin` (DATE), `estado` (`borrador`, `en_revision`, `aprobada`).
 6. **`mediciones_campo`**:
    - Volumetrías y generadores capturados en sitio con soporte geométrico y fotográfico.
-   - Campos: `id` (BIGINT PK), `id_estimacion` (FK a estimaciones), `id_concepto` (FK a catalogo_conceptos), `localizacion` (TEXT), `eje` (TEXT), `tramo` (TEXT), `largo` (NUMERIC), `ancho` (NUMERIC), `alto` (NUMERIC), `piezas` (NUMERIC), `cantidad_total` (NUMERIC), `url_foto` (TEXT), `url_croquis` (TEXT).
+   - Columnas: `id` (BIGINT PK), `id_estimacion` (FK a estimaciones), `id_concepto` (FK a catalogo_conceptos), `localizacion` (TEXT), `eje` (TEXT), `tramo` (TEXT), `largo` (NUMERIC), `ancho` (NUMERIC), `alto` (NUMERIC), `piezas` (NUMERIC), `cantidad_total` (NUMERIC), `url_foto` (TEXT), `url_croquis` (TEXT).
 7. **`perfiles`**:
-   - Datos ampliados de usuario (`nombre`, `empresa_despacho`) asociados al identificador único de autenticación.
+   - Datos ampliados de usuario (`nombre`, `empresa_despacho`) asociados al identificador único de autenticación (`auth.uid()`).
 
-### 3.2 Almacenamiento (Supabase Storage)
-- **Bucket `evidencias`**:
-  - Almacena fotos de campo y croquis técnicos subidos desde la Tab de Captura.
-  - Las imágenes son procesadas con Pillow antes de ser cargadas (máx. 1280px / 80% calidad JPEG).
-- **Bucket `plantillas`**:
-  - Almacena en la nube las plantillas maestras `.xlsx` para descarga e inyección dinámica.
+### 3.3 Almacenamiento (Supabase Storage)
+- **Bucket `evidencias`**: Almacena fotos de campo y croquis técnicos subidos desde la pestaña de captura. Las imágenes deben optimizarse con Pillow antes de ser cargadas (máx. 1280px / 80% calidad JPEG).
+- **Bucket `plantillas`**: Almacena en la nube las plantillas maestras `.xlsx` para descarga e inyección dinámica.
 
 ---
 
