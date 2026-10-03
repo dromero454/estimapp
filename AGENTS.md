@@ -25,38 +25,38 @@ El agente DEBE consultar y respetar los manuales y directrices locales antes de 
 El agente dispone de integración activa con el servidor MCP de Supabase (`supabase-db` vía OAuth):
 - **Capacidad de Inspección**: Utilizar prioritariamente las herramientas del servidor MCP para consultar schemas reales, tablas, tipos de columnas, foreign keys y políticas RLS directamente en Supabase Cloud.
 - **Seguridad en Consultas**: Priorizar operaciones de solo lectura para diagnóstico. NUNCA ejecutar sentencias `DROP`, `TRUNCATE` ni `DELETE` directas sobre datos existentes de clientes o proyectos reales.
-- **Datos de Prueba**: Todo registro insertado durante validaciones debe llevar el prefijo `TEST_` y eliminarse al concluir la verificación.
+- **Aislamiento de Pruebas**: Todo registro generado durante pruebas debe usar el prefijo `TEST_` para garantizar una limpieza completa al finalizar.
 
 ---
 
-## 4. Protocolo Holístico de Pruebas y Diagnóstico (End-to-End)
-Al ejecutar tareas de auditoría, refactorización o verificación funcional, el agente DEBE validar los tres niveles del sistema:
+## 4. Protocolo Holístico de Pruebas E2E (Simulación de Usuario)
+Al realizar validaciones completas, el agente debe cubrir el flujo de vida completo del sistema:
 
-1. **Capa 1: Base de Datos (MCP / SQL)**:
-   - Validar coherencia relacional entre `instituciones`, `proyectos`, `catalogo_conceptos`, `estimaciones` y `mediciones_campo`.
-   - Comprobar que los tipos numéricos monetarios y de volumetría mantengan precisión adecuada (`NUMERIC`).
-2. **Capa 2: Backend Modular (`./modulos/`)**:
-   - `auth_engine.py`: Autenticación, creación de perfiles y control de sesión.
-   - `db_engine.py`: Consultas con `@st.cache_data`, normalización estricta mediante `normalizar_unidad()`.
-   - `excel_engine.py` & `pdf_engine.py`: Verificación de inyección binaria sobre las plantillas maestras en `./test_files/` sin corromper celdas ni fórmulas.
-   - Comprobación estática de dependencias circulares e imports rotos.
-3. **Capa 3: Frontend y UI (`./app.py`)**:
-   - Inspeccionar la reactividad de `st.session_state` y prevenir errores por widgets duplicados o recreados dinámicamente (`StreamlitWidgetAlreadyInstantiatedError`).
-   - Comprobar que las 6 pestañas rendericen sin excepciones en consola.
+1. **Autenticación**: Iniciar sesión utilizando las credenciales de testing configuradas en `.streamlit/secrets.toml` bajo el bloque `[test_user]`.
+2. **Creación de Entidades (Ciclo Completo)**:
+   - Dar de alta una institución de prueba (`TEST_INSTITUCION`).
+   - Crear un contrato/proyecto oficial (`TEST_OBRA_SIMULADA`) asignado a un residente de obra.
+   - Poblar el catálogo con conceptos representativos utilizando **todas las unidades disponibles** en el normalizador de `db_engine.py` (`m`, `m²`, `m³`, `kg`, `pza`, `lote`, etc.), con cantidades contratadas y precios unitarios coherentes.
+   - Abrir **3 periodos de estimación** consecutivos.
+   - Capturar generadores de avance en campo para validar la reactividad geométrica.
+3. **Validación de Salidas y Reportes**:
+   - Inspeccionar el renderizado del dashboard de balance financiero y avance físico.
+   - Validar la compilación del resumen ejecutivo en PDF (ReportLab) y la exportación de plantillas Excel (OpenPyXL) sin excepciones de runtime.
+4. **Limpieza e Integridad de Borrado (Tear Down)**:
+   - Validar que los botones de eliminación de registros (generadores, estimaciones, conceptos, proyectos e instituciones) eliminen los datos de forma atómica y en cascada sin dejar huérfanos en la base de datos ni provocar caídas visuales en la interfaz.
 
 ---
 
 ## 5. Reglas Críticas de Arquitectura (INVIOLABLES)
 1. **Header Sticky Unificado**:
    - El membrete superior (Logo, Institución, Subtítulo, Usuario y botón Salir) DEBE residir en un único bloque HTML inyectado con clase `.sticky-header` (`top: 0`).
-   - NUNCA dividir el encabezado en `st.columns` nativos sueltos de Streamlit, ya que fragmenta el contenedor e impide que descienda junto con el scroll.
-   - Las pestañas (`tablist`) deben fijarse a `top: 72px`.
+   - NUNCA dividir el encabezado en `st.columns` nativos de Streamlit. Las pestañas (`tablist`) deben fijarse a `top: 72px`.
 2. **Desacople Institución vs Categoría**:
-   - `instituciones`: Tabla propia en Supabase. NUNCA usar registros dummy 'INIT' para simular dependencias.
-   - `categoria`: Subpartida/partida opcional dentro de los conceptos. NUNCA almacenar el nombre de la institución en este campo.
+   - `instituciones`: Tabla propia en Supabase. NUNCA usar registros dummy 'INIT'.
+   - `categoria`: Subpartida/partida opcional dentro de los conceptos.
 3. **Persistencia Multiusuario Retrocompatible**:
-   - Toda consulta a tablas compartidas o de usuario debe incluir el filtro: `.or_(f"user_id.eq.{user_id},user_id.is.null")`.
+   - Toda consulta debe incluir: `.or_(f"user_id.eq.{user_id},user_id.is.null")`.
 4. **Normalización de Unidades**:
-   - Ninguna unidad de medida entra a la base de datos ni a los cálculos sin pasar por `normalizar_unidad()` de `./modulos/db_engine.py`.
+   - Obligatorio usar `normalizar_unidad()` de `./modulos/db_engine.py`.
 5. **Limpieza de Formularios sin Romper Sesión**:
-   - Para limpiar campos de texto tras envíos exitosos, incrementar la clave de versión dinámica (`counter_key += 1`) en `st.session_state`.
+   - Incrementar la clave de versión dinámica (`counter_key += 1`) en `st.session_state` tras un envío exitoso.
