@@ -2,852 +2,180 @@ import streamlit as st
 from supabase import create_client, Client
 import uuid
 import pandas as pd
-from PIL import Image
-import io
 import datetime
-import matplotlib.pyplot as plt
-import requests
-
-# Librerías para generación de PDF corporativo
-from reportlab.lib.pagesizes import letter
-from reportlab.lib import colors
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image as RLImage, KeepTogether
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-
-# Librería para inyección de Excel Institucional e imágenes
-import openpyxl
-from openpyxl.drawing.image import Image as OpenpyxlImage
-from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
-from openpyxl.utils import get_column_letter
-
-st.set_page_config(page_title="Estimapp", page_icon="🏗", layout="wide")
-
-# Conexión con Supabase
-url = st.secrets["SUPABASE_URL"]
-key = st.secrets["SUPABASE_KEY"]
-supabase: Client = create_client(url, key)
 
 # =============================================================
-# ESTILOS CSS
+# IMPORTACIÓN DE MÓDULOS DE BACKEND
+# =============================================================
+from modulos.auth_engine import render_login_card
+from modulos.db_engine import (
+    normalizar_unidad, unidades_list, get_proyectos, get_biblioteca_instituciones,
+    get_biblioteca_conceptos, get_conceptos, get_estimaciones, get_mediciones,
+    generar_plantilla_excel, extraer_nombre_archivo, optimizar_imagen
+)
+from modulos.pdf_engine import generar_pdf_resumen_ejecutivo
+from modulos.excel_engine import inyectar_datos_excel_imss, inyectar_datos_excel_pjf, generar_excel_estimapp, descargar_plantilla_supabase
+
+# =============================================================
+# CONFIGURACIÓN INICIAL Y CLIENTE SUPABASE
+# =============================================================
+st.set_page_config(page_title="Estimapp", page_icon="🏗", layout="wide")
+
+if "supabase_client" not in st.session_state:
+    url = st.secrets["SUPABASE_URL"]
+    key = st.secrets["SUPABASE_KEY"]
+    st.session_state["supabase_client"] = create_client(url, key)
+
+supabase: Client = st.session_state["supabase_client"]
+
+# Detector universal de Logout (Rápido y persistente)
+params = st.query_params if hasattr(st, "query_params") else st.experimental_get_query_params()
+if "logout" in params:
+    if hasattr(st, "query_params"):
+        try: del st.query_params["logout"]
+        except Exception: pass
+    else:
+        st.experimental_set_query_params()
+    try: supabase.auth.sign_out()
+    except Exception: pass
+    st.session_state.clear()
+    st.rerun()
+
+# =============================================================
+# CSS (HEADER COMPLETO STICKY Y TABS)
 # =============================================================
 st.markdown("""
 <style>
 header[data-testid="stHeader"] { display: none !important; }
 .block-container { padding-top: 0.5rem !important; padding-bottom: 2rem !important; }
+
+/* El contenedor del Header completo fijado al techo */
 div[data-testid="stElementContainer"]:has(.sticky-header) {
-    position: sticky !important; top: 0 !important; z-index: 99 !important;
+    position: sticky !important; 
+    top: 0 !important; 
+    z-index: 99 !important;
     background-color: var(--background-color, #ffffff) !important;
 }
+
 .sticky-header {
     background-color: var(--background-color, #ffffff) !important;
-    padding-top: 2px; padding-bottom: 2px;
+    padding-top: 4px; 
+    padding-bottom: 4px;
+    width: 100%;
 }
+
+/* Las Tabs pegadas exactamente debajo del Header completo */
 div[data-baseweb="tab-list"], div[role="tablist"] {
-    position: sticky !important; top: 68px !important; z-index: 98 !important;
+    position: sticky !important; 
+    top: 72px !important; /* Altura exacta del Header */
+    z-index: 98 !important;
     background-color: var(--background-color, #ffffff) !important;
-    padding-top: 4px !important; padding-bottom: 4px !important;
+    padding-top: 4px !important; 
+    padding-bottom: 4px !important;
     border-bottom: 1px solid rgba(0, 0, 0, 0.08) !important;
 }
+
 button[data-baseweb="tab"], button[data-baseweb="tab"] p, button[data-baseweb="tab"] span {
     font-size: 1.15rem !important; font-weight: 500 !important;
 }
-</style>
 
+/* Botón de Salir con estilo idéntico a Streamlit */
+.btn-salir-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 500;
+    padding: 0.25rem 1rem;
+    border-radius: 0.5rem;
+    min-height: 38px;
+    line-height: 1.6;
+    color: #31333f !important;
+    background-color: #ffffff;
+    border: 1px solid rgba(49, 51, 63, 0.2);
+    text-decoration: none !important;
+    font-size: 0.95rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.btn-salir-link:hover {
+    border-color: #ff4b4b !important;
+    color: #ff4b4b !important;
+    background-color: #fff5f5;
+    text-decoration: none !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# Variables de estado globales
+keys = ["del_proy_counter", "del_conc_counter", "del_est_counter", "del_med_counter", "cap_counter", "dim_counter", "bib_del_counter", "up_bib_key", "up_proy_key", "ms_lote_key", "new_cat_key", "cat_activa"]
+for k in keys:
+    if k not in st.session_state: st.session_state[k] = 0 if "counter" in k or "key" in k else "IMSS"
+
+# =============================================================
+# FLUJO DE AUTENTICACIÓN
+# =============================================================
+if "user" not in st.session_state or st.session_state["user"] is None:
+    render_login_card(supabase)
+    st.stop()
+
+user_id = st.session_state["user"].id
+perfil_usr = st.session_state.get("perfil", {})
+nom_usr = perfil_usr.get("nombre") or st.session_state["user"].email.split("@")[0]
+email_usr = st.session_state["user"].email
+empresa_usr = perfil_usr.get("empresa_despacho") or "Independiente"
+
+# =============================================================
+# ENCABEZADO UNIFICADO STICKY (UN SOLO CONTENEDOR)
+# =============================================================
+st.markdown(f"""
 <div class="sticky-header">
-    <h1 style='margin: 0; padding: 0; font-size: 2.35rem; line-height: 1.15; font-weight: 700;'>
-        Estimapp <span style='font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji";'>🏗</span>
-    </h1>
-    <div style='color: #6c757d; font-size: 1.05rem; margin-top: 2px; margin-bottom: 4px;'>
-        Control de avance físico y financiero de obra
+    <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+        <!-- Lado Izquierdo: Logo + Institución + Subtítulo -->
+        <div>
+            <div style="display: flex; align-items: baseline; gap: 12px; flex-wrap: nowrap;">
+                <h1 style='margin: 0; padding: 0; font-size: 2.3rem; line-height: 1.15; font-weight: 700; white-space: nowrap;'>
+                    Estimapp <span style='font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji";'>🏗</span>
+                </h1>
+                <span style='font-size: 1.1rem; font-weight: 500; color: #6c757d; border-left: 2px solid #cbd5e1; padding-left: 12px; white-space: nowrap;'>
+                    | {empresa_usr}
+                </span>
+            </div>
+            <div style='color: #6c757d; font-size: 1.0rem; margin-top: 2px; margin-bottom: 2px;'>
+                Control de avance físico y financiero de obra
+            </div>
+        </div>
+        <!-- Lado Derecho: Usuario + Botón Salir -->
+        <div style="display: flex; align-items: center; gap: 16px;">
+            <div style='text-align: right; line-height: 1.25;'>
+                <div style='font-weight: 600; font-size: 0.95rem; color: #1e293b;'>{nom_usr}</div>
+                <div style='font-size: 0.8rem; color: #64748b;'>{email_usr}</div>
+            </div>
+            <a href="?logout=1" target="_self" class="btn-salir-link">Salir</a>
+        </div>
     </div>
 </div>
 """, unsafe_allow_html=True)
 
-# =============================================================
-# FUNCIONES DE CACHÉ Y NORMALIZACIÓN
-# =============================================================
-@st.cache_data(show_spinner=False)
-def get_proyectos():
-    res = supabase.table("proyectos").select("*").order("id").execute()
-    return res.data or []
-
-@st.cache_data(show_spinner=False)
-def get_biblioteca_categorias():
-    res = supabase.table("biblioteca_conceptos").select("categoria").execute()
-    cats = sorted(list(set(c["categoria"] for c in res.data))) if res.data else []
-    if "IMSS" not in cats: cats.insert(0, "IMSS")
-    if "Poder Judicial de la Federación" not in cats: cats.insert(1, "Poder Judicial de la Federación")
-    return cats
-
-@st.cache_data(show_spinner=False)
-def get_biblioteca_conceptos(categoria: str):
-    res = supabase.table("biblioteca_conceptos").select("*").eq("categoria", categoria).order("clave").execute()
-    return res.data or []
-
-@st.cache_data(show_spinner=False)
-def get_conceptos(id_proyecto: int):
-    res = supabase.table("catalogo_conceptos").select("*").eq("id_proyecto", id_proyecto).order("id").execute()
-    return res.data or []
-
-@st.cache_data(show_spinner=False)
-def get_estimaciones(id_proyecto: int):
-    res = supabase.table("estimaciones").select("*").eq("id_proyecto", id_proyecto).order("num_periodo").execute()
-    return res.data or []
-
-@st.cache_data(show_spinner=False)
-def get_mediciones(id_estimacion: int):
-    res = supabase.table("mediciones_campo").select(
-        "id, localizacion, eje, tramo, largo, ancho, alto, piezas, cantidad_total, url_foto, url_croquis, id_concepto, catalogo_conceptos(clave, unidad, precio_unitario)"
-    ).eq("id_estimacion", id_estimacion).order("id").execute()
-    return res.data or []
-
-def normalizar_unidad(u: str) -> str:
-    if pd.isna(u) or not u or str(u).strip() == "": return "s/u"
-    u_up = str(u).strip().upper()
-    if u_up in ["M2", "M²"]: return "m²"
-    if u_up in ["M3", "M³"]: return "m³"
-    if u_up in ["LITRO", "LITROS", "LT", "LTS", "L", "ML"]: return "litros"
-    if u_up in ["KG", "KILOGRAMO", "KILOS"]: return "kg"
-    if u_up in ["PZA", "PZAS", "PIEZA", "PIEZAS"]: return "pza"
-    if u_up in ["LOTE"]: return "lote"
-    if u_up in ["TRAMO"]: return "tramo"
-    if u_up in ["JGO", "JUEGO", "JGOS"]: return "jgo"
-    if u_up in ["M", "METRO", "METROS"]: return "m"
-    if u_up in ["H", "HR", "HORAS", "HORA", "MANO DE OBRA", "MANO DE OBRA (H)"]: return "mano de obra (h)"
-    if u_up in ["M3/KM", "M³/KM", "M3 / KM", "M³ / KM"]: return "m³/km"
-    return u_up.lower()
-
-unidades_list = ["m²", "m³", "litros", "kg", "pza", "lote", "jgo", "tramo", "m", "mano de obra (h)", "m³/km", "s/u"]
-
-def generar_plantilla_excel(tipo="biblioteca"):
-    output = io.BytesIO()
-    if tipo == "biblioteca": df = pd.DataFrame(columns=["Especialidad", "Clave", "Descripcion", "Unidad", "Precio_Unitario"])
-    else: df = pd.DataFrame(columns=["Especialidad", "Clave", "Descripcion", "Unidad", "Cantidad_Contratada", "Precio_Unitario"])
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name='Plantilla')
-    return output.getvalue()
-
-def extraer_nombre_archivo(url_publica: str) -> str:
-    if not url_publica: return ""
-    return url_publica.split("/")[-1].split("?")[0]
-
-def optimizar_imagen(archivo_subido, max_dim=1280, calidad=80):
-    try:
-        img = Image.open(archivo_subido)
-        if img.mode in ("RGBA", "P"): img = img.convert("RGB")
-        img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
-        buffer = io.BytesIO()
-        img.save(buffer, format="JPEG", quality=calidad, optimize=True)
-        return buffer.getvalue(), "image/jpeg"
-    except Exception:
-        return archivo_subido.getvalue(), archivo_subido.type
-
-# Callbacks para categorías
-def crear_categoria_callback():
-    cat_nombre = st.session_state.get("input_nueva_cat", "").strip()
-    if cat_nombre:
-        try:
-            supabase.table("biblioteca_conceptos").insert({
-                "categoria": cat_nombre,
-                "clave": "INIT",
-                "descripcion": "Concepto inicial (Puedes borrarlo)",
-                "unidad": "pza",
-                "precio_referencial": 0
-            }).execute()
-            get_biblioteca_categorias.clear()
-            st.session_state["sel_cat_admin"] = cat_nombre
-        except Exception:
-            pass
-    st.session_state["input_nueva_cat"] = ""
-
-def eliminar_categoria_callback():
-    cat_a_borrar = st.session_state.get("sel_cat_admin")
-    if cat_a_borrar:
-        try:
-            supabase.table("biblioteca_conceptos").delete().eq("categoria", cat_a_borrar).execute()
-            get_biblioteca_categorias.clear()
-            get_biblioteca_conceptos.clear()
-            st.session_state["sel_cat_admin"] = "IMSS"
-        except Exception:
-            pass
+# Generador de nombres dinámicos para evitar caché en descargas Excel
+ts_descarga = int(datetime.datetime.now().timestamp())
 
 # =============================================================
-# MOTOR DE GENERACIÓN DE EXCEL Y CÁLCULOS CENTRALIZADOS
+# INTERFAZ PRINCIPAL (6 PESTAÑAS)
 # =============================================================
-def descargar_plantilla_supabase(bucket_name, file_name):
-    url_plantilla = supabase.storage.from_(bucket_name).get_public_url(file_name)
-    response = requests.get(url_plantilla)
-    if response.status_code == 200:
-        return io.BytesIO(response.content)
-    else:
-        raise Exception(f"No se pudo descargar la plantilla de {url_plantilla}")
-
-def set_cell_value(ws, col, row, value):
-    coord = f"{col}{row}"
-    cell = ws[coord]
-    if type(cell).__name__ == 'MergedCell':
-        for rng in ws.merged_cells.ranges:
-            if cell.row >= rng.min_row and cell.row <= rng.max_row and cell.column >= rng.min_col and cell.column <= rng.max_col:
-                ws.cell(row=rng.min_row, column=rng.min_col).value = value
-                break
-    else:
-        cell.value = value
-
-def _preparar_datos_estimacion(estimacion_info, conceptos_cat, estimaciones_dash):
-    monto_contratado_total = sum(float(c.get("cantidad_contratada") or 0.0) * float(c.get("precio_unitario") or 0.0) for c in conceptos_cat)
-    acumulados_anteriores = {c["id"]: 0.0 for c in conceptos_cat}
-    cant_periodo_dict = {c["id"]: 0.0 for c in conceptos_cat}
-    mediciones_actual = []
-
-    for e in sorted(estimaciones_dash, key=lambda x: x['num_periodo']):
-        meds_e = get_mediciones(e["id"])
-        if e["id"] == estimacion_info["id"]:
-            mediciones_actual = meds_e
-            for m in meds_e:
-                c_id = m.get("id_concepto")
-                cant_periodo_dict[c_id] = cant_periodo_dict.get(c_id, 0.0) + float(m.get("cantidad_total") or 0.0)
-        elif e["num_periodo"] < estimacion_info["num_periodo"]:
-            for m in meds_e:
-                c_id = m.get("id_concepto")
-                acumulados_anteriores[c_id] = acumulados_anteriores.get(c_id, 0.0) + float(m.get("cantidad_total") or 0.0)
-
-    conceptos_procesados = []
-    for c in conceptos_cat:
-        c_id = c["id"]
-        cant_ant = acumulados_anteriores.get(c_id, 0.0)
-        cant_pres = cant_periodo_dict.get(c_id, 0.0)
-        conceptos_procesados.append({
-            "id": c_id, "clave": c['clave'], "descripcion": c['descripcion'], "especialidad": c.get('especialidad', 'GENERAL'),
-            "unidad": normalizar_unidad(c['unidad']), "cant_contratada": float(c.get('cantidad_contratada') or 0.0),
-            "pu": float(c.get('precio_unitario') or 0.0), "cant_anterior": cant_ant, "cant_periodo": cant_pres, "cant_acumulada": cant_ant + cant_pres
-        })
-    return monto_contratado_total, conceptos_procesados, mediciones_actual
-
-def inyectar_datos_excel_imss(plantilla_bytes, proy_info, estimacion_info, conceptos_cat, estimaciones_dash):
-    wb = openpyxl.load_workbook(plantilla_bytes)
-    monto_contratado_total, conceptos_procesados, mediciones_actual = _preparar_datos_estimacion(estimacion_info, conceptos_cat, estimaciones_dash)
-    conceptos_con_avance_periodo = [c for c in conceptos_procesados if c['cant_periodo'] > 0]
-    
-    ws_datos = wb["DATOS"]
-    set_cell_value(ws_datos, 'B', 2, proy_info.get('nombre_obra', ''))
-    set_cell_value(ws_datos, 'B', 4, proy_info.get('descripcion_sintetica', ''))
-    set_cell_value(ws_datos, 'B', 6, proy_info.get('ubicacion', ''))
-    set_cell_value(ws_datos, 'B', 8, proy_info.get('unidad', ''))
-    set_cell_value(ws_datos, 'B', 12, proy_info.get('contratista', ''))
-    set_cell_value(ws_datos, 'B', 14, proy_info.get('residente_obra', ''))
-    set_cell_value(ws_datos, 'B', 16, proy_info.get('contrato_no', ''))
-    set_cell_value(ws_datos, 'B', 20, f"DEL {estimacion_info.get('periodo_inicio', '')} AL {estimacion_info.get('periodo_fin', '')}")
-    set_cell_value(ws_datos, 'B', 23, datetime.datetime.now().strftime("%d/%m/%Y"))
-    set_cell_value(ws_datos, 'B', 31, f"{estimacion_info.get('num_periodo', 1)} ({estimacion_info.get('estado', 'NORMAL').upper()})")
-    set_cell_value(ws_datos, 'B', 35, monto_contratado_total)
-
-    ws_cat = wb["CATALOGO"]
-    fila_cat = 14
-    for c in conceptos_cat:
-        set_cell_value(ws_cat, 'A', fila_cat, c['clave'])
-        set_cell_value(ws_cat, 'B', fila_cat, c['descripcion'])
-        set_cell_value(ws_cat, 'C', fila_cat, normalizar_unidad(c['unidad']))
-        cant, pu = float(c.get('cantidad_contratada') or 0.0), float(c.get('precio_unitario') or 0.0)
-        set_cell_value(ws_cat, 'D', fila_cat, cant)
-        set_cell_value(ws_cat, 'E', fila_cat, pu)
-        set_cell_value(ws_cat, 'G', fila_cat, cant * pu)
-        set_cell_value(ws_cat, 'H', fila_cat, (cant * pu / monto_contratado_total) if monto_contratado_total > 0 else 0)
-        fila_cat += 1
-
-    ws_est = wb["Estimacion"]
-    fila_est = 14
-    for c_idx, c in enumerate(conceptos_con_avance_periodo, start=1):
-        set_cell_value(ws_est, 'A', fila_est, c_idx)
-        set_cell_value(ws_est, 'B', fila_est, c['descripcion'])
-        set_cell_value(ws_est, 'E', fila_est, c['unidad'])
-        set_cell_value(ws_est, 'G', fila_est, c['clave'])
-        set_cell_value(ws_est, 'H', fila_est, c['cant_contratada'])
-        set_cell_value(ws_est, 'I', fila_est, c['cant_acumulada'])
-        set_cell_value(ws_est, 'J', fila_est, c['cant_acumulada'] - c['cant_periodo'])
-        set_cell_value(ws_est, 'K', fila_est, c['cant_periodo'])
-        set_cell_value(ws_est, 'L', fila_est, c['pu'])
-        set_cell_value(ws_est, 'M', fila_est, c['cant_periodo'] * c['pu'])
-        fila_est += 1
-
-    ws_gen = wb["Generador"]
-    fila_gen = 14
-    for c in conceptos_con_avance_periodo:
-        set_cell_value(ws_gen, 'A', fila_gen, c['clave'])
-        set_cell_value(ws_gen, 'B', fila_gen, c['descripcion'])
-        set_cell_value(ws_gen, 'J', fila_gen, c['unidad'])
-        fila_gen += 1
-        
-        meds_conc = [m for m in mediciones_actual if m['id_concepto'] == c['id']]
-        for m in meds_conc:
-            set_cell_value(ws_gen, 'B', fila_gen, m.get('localizacion', ''))
-            set_cell_value(ws_gen, 'D', fila_gen, m.get('eje', ''))
-            set_cell_value(ws_gen, 'E', fila_gen, m.get('tramo', ''))
-            set_cell_value(ws_gen, 'F', fila_gen, float(m.get('ancho') or 0.0))
-            set_cell_value(ws_gen, 'G', fila_gen, float(m.get('largo') or 0.0))
-            set_cell_value(ws_gen, 'H', fila_gen, float(m.get('alto') or 0.0))
-            set_cell_value(ws_gen, 'I', fila_gen, float(m.get('piezas') or 1.0))
-            set_cell_value(ws_gen, 'J', fila_gen, c['unidad'])
-            set_cell_value(ws_gen, 'K', fila_gen, float(m.get('cantidad_total') or 0.0))
-            fila_gen += 1
-        fila_gen += 1
-
-    ws_croquis, ws_fotos = wb["Croquis"], wb["Bit. Fotografica"]
-    fila_croquis, fila_fotos = 8, 8
-    for m in mediciones_actual:
-        c_ref = next((c for c in conceptos_cat if c['id'] == m['id_concepto']), {})
-        c_clave = c_ref.get('clave', 'S/C')
-        if m.get('url_croquis'):
-            try:
-                resp = requests.get(m['url_croquis'], timeout=10)
-                if resp.status_code == 200:
-                    img = OpenpyxlImage(io.BytesIO(resp.content))
-                    img.width, img.height = 400, 300
-                    ws_croquis.add_image(img, f'B{fila_croquis}')
-                    set_cell_value(ws_croquis, 'A', fila_croquis, f"Concepto: {c_clave} - Loc: {m.get('localizacion','')}")
-                    fila_croquis += 18
-            except Exception: pass
-        if m.get('url_foto'):
-            try:
-                resp = requests.get(m['url_foto'], timeout=10)
-                if resp.status_code == 200:
-                    img = OpenpyxlImage(io.BytesIO(resp.content))
-                    img.width, img.height = 400, 300
-                    ws_fotos.add_image(img, f'B{fila_fotos}')
-                    set_cell_value(ws_fotos, 'A', fila_fotos, f"Concepto: {c_clave} - Loc: {m.get('localizacion','')}")
-                    fila_fotos += 18
-            except Exception: pass
-
-    output = io.BytesIO()
-    wb.save(output)
-    output.seek(0)
-    return output.getvalue()
-
-
-def inyectar_datos_excel_pjf(plantilla_bytes, proy_info, estimacion_info, conceptos_cat, estimaciones_dash):
-    # Cargar plantilla y datos
-    wb = openpyxl.load_workbook(plantilla_bytes)
-    monto_contratado_total, conceptos_procesados, mediciones_actual = _preparar_datos_estimacion(estimacion_info, conceptos_cat, estimaciones_dash)
-    
-    # --- IMPORTANTE: NO RENOMBRAREMOS LAS PESTAÑAS DEL PJF ---
-    # Renombrar pestañas dinámicamente con openpyxl rompe las referencias cruzadas de fórmulas de Excel y corrompe el archivo.
-    # El archivo saldrá con los nombres originales y formulas 100% íntegras.
-
-    # --- 1. CARATULA ---
-    ws_car = wb['CARATULA DICIEMBRE 2025']
-    set_cell_value(ws_car, 'H', 2, proy_info.get('contrato_no', 'S/N'))
-    set_cell_value(ws_car, 'H', 3, datetime.datetime.now().strftime("%d/%m/%Y"))
-    set_cell_value(ws_car, 'C', 4, f"ESTIMACIÓN No. {estimacion_info.get('num_periodo', 1):02d}")
-    set_cell_value(ws_car, 'C', 5, f"DEL {estimacion_info.get('periodo_inicio', '')} AL {estimacion_info.get('periodo_fin', '')}")
-    set_cell_value(ws_car, 'F', 5, proy_info.get('nombre_obra', ''))
-    set_cell_value(ws_car, 'F', 8, proy_info.get('ubicacion', ''))
-    
-    contratista = proy_info.get('contratista', '')
-    set_cell_value(ws_car, 'L', 13, contratista if contratista else 'COMPLETAR CONTRATISTA')
-    set_cell_value(ws_car, 'D', 22, monto_contratado_total)
-
-    # --- 2. ESTADO DE CUENTA ---
-    ws_est_cta = wb['ESTADO DE CUENTA AGOSTO 2026']
-    telefono = proy_info.get('telefono', '')
-    set_cell_value(ws_est_cta, 'E', 6, telefono if telefono else 'COMPLETAR TEL')
-    
-    fila_cta = 14
-    for est in sorted(estimaciones_dash, key=lambda x: x['num_periodo']):
-        if est['num_periodo'] > estimacion_info['num_periodo']: continue
-        meds = get_mediciones(est['id'])
-        importe_est = sum(float(m.get('cantidad_total') or 0.0) * float(next((c['precio_unitario'] for c in conceptos_cat if c['id'] == m.get('id_concepto')), 0)) for m in meds)
-        
-        set_cell_value(ws_est_cta, 'A', fila_cta, est['num_periodo'])
-        set_cell_value(ws_est_cta, 'B', fila_cta, f"Est. {est['num_periodo']} ({est['periodo_inicio']})")
-        set_cell_value(ws_est_cta, 'C', fila_cta, importe_est)
-        set_cell_value(ws_est_cta, 'I', fila_cta, 0) # Sin deducciones extra
-        fila_cta += 1
-        if fila_cta > 26: break
-
-    # --- 3. RESUMEN ---
-    ws_res = wb['RESUMEN AGOSTO 2026']
-    importes_esp = {}
-    for c in conceptos_procesados:
-        esp = c['especialidad']
-        importes_esp[esp] = importes_esp.get(esp, 0.0) + (c['cant_periodo'] * c['pu'])
-        
-    fila_res = 18
-    for i, (esp, imp) in enumerate(importes_esp.items(), start=1):
-        set_cell_value(ws_res, 'A', fila_res, i)
-        set_cell_value(ws_res, 'B', fila_res, esp)
-        set_cell_value(ws_res, 'K', fila_res, imp)
-        fila_res += 1
-        if fila_res > 29: break
-
-    # --- 4. ESTIMACIÓN (Inyección estricta de 4 conceptos máximo por página, sin borrar filas) ---
-    ws_est = wb['ESTIMACIÓN AGOSTO 2026']
-    page_starts = [r for r in range(1, ws_est.max_row + 1) if ws_est.cell(row=r, column=4).value and "DATOS DEL CONTRATO" in str(ws_est.cell(row=r, column=4).value).upper()]
-    
-    c_idx = 0
-    # Desplazamientos fijos para los 4 conceptos de la plantilla PJF: 
-    # (offset_encabezado, offset_datos_matemáticos)
-    slots = [(13, 14), (15, 16), (17, 18), (19, 20)] 
-    
-    for p_start in page_starts:
-        if c_idx >= len(conceptos_procesados): break
-        for off_h, off_d in slots:
-            if c_idx < len(conceptos_procesados):
-                c = conceptos_procesados[c_idx]
-                r_hdr = p_start + off_h
-                r_data = p_start + off_d
-                
-                # Fila de Encabezado / Especialidad (Sin tocar fórmulas a la derecha)
-                set_cell_value(ws_est, 'B', r_hdr, c['especialidad'])
-                
-                # Fila de Datos Duros (Sin inyectar fórmulas dinámicas en K, L, M para no aplastar el Excel)
-                set_cell_value(ws_est, 'A', r_data, c['clave'])
-                set_cell_value(ws_est, 'B', r_data, c['descripcion'])
-                set_cell_value(ws_est, 'E', r_data, c['unidad'])
-                set_cell_value(ws_est, 'F', r_data, c['pu'])
-                set_cell_value(ws_est, 'G', r_data, c['cant_contratada'])
-                set_cell_value(ws_est, 'I', r_data, c['cant_anterior'])
-                set_cell_value(ws_est, 'J', r_data, c['cant_periodo'])
-                
-                c_idx += 1
-
-    # --- 5. REPORTE FOTOGRÁFICO (Sin borrar filas para no corromper la plantilla) ---
-    ws_fotos = wb['REPORTE FOTOGRAFICO']
-    page_starts_fotos = [r for r in range(1, ws_fotos.max_row + 1) if ws_fotos.cell(row=r, column=4).value and "DATOS DEL CONTRATO" in str(ws_fotos.cell(row=r, column=4).value).upper()]
-    
-    fotos_list = []
-    for m in mediciones_actual:
-        if m.get('url_foto') or m.get('url_croquis'):
-            c_ref = next((c for c in conceptos_cat if c['id'] == m['id_concepto']), {})
-            desc_base = f"{c_ref.get('clave', '')} - {m.get('localizacion', '')}"
-            if m.get('url_foto'): fotos_list.append((m['url_foto'], desc_base))
-            if m.get('url_croquis'): fotos_list.append((m['url_croquis'], f"{desc_base} (Croquis)"))
-
-    def _insertar_img(ws, r_img, c_let, r_txt, f_data):
-        url, desc = f_data
-        try:
-            resp = requests.get(url, timeout=10)
-            if resp.status_code == 200:
-                img = OpenpyxlImage(io.BytesIO(resp.content))
-                img.width, img.height = 320, 240
-                ws.add_image(img, f"{c_let}{r_img}")
-                ws.cell(row=r_txt, column=1 if c_let == 'B' else 8, value=desc)
-        except Exception: pass
-
-    f_idx = 0
-    for p_start in page_starts_fotos:
-        if f_idx >= len(fotos_list): break
-        # Espacios designados en la plantilla para fotos: B16, H16, B25, H25
-        slots_img = [('B', 16, 15), ('H', 16, 15), ('B', 25, 24), ('H', 25, 24)]
-        for c_let, r_img, r_txt in slots_img:
-            if f_idx < len(fotos_list):
-                _insertar_img(ws_fotos, p_start + r_img, c_let, p_start + r_txt, fotos_list[f_idx])
-                f_idx += 1
-
-    output = io.BytesIO()
-    wb.save(output)
-    output.seek(0)
-    return output.getvalue()
-
-
-def generar_excel_estimapp(proy_info, estimacion_info, conceptos_cat, estimaciones_dash):
-    """ Generador multi-pestaña desde cero con formato corporativo Estimapp y bordes """
-    monto_contratado_total, conceptos_procesados, mediciones_actual = _preparar_datos_estimacion(estimacion_info, conceptos_cat, estimaciones_dash)
-    
-    # Formato seguro de 3 letras para el nombre de las pestañas
-    try:
-        dt = pd.to_datetime(estimacion_info.get('periodo_fin'))
-        meses_corto = ["ENE", "FEB", "MAR", "ABR", "MAY", "JUN", "JUL", "AGO", "SEP", "OCT", "NOV", "DIC"]
-        mes_anio_corto = f"{meses_corto[dt.month - 1]} {str(dt.year)[-2:]}"
-    except:
-        mes_anio_corto = "ACTUAL"
-
-    wb = openpyxl.Workbook()
-    font_titulo = Font(name="Segoe UI", size=14, bold=True, color="1F2937")
-    font_headers = Font(name="Segoe UI", size=10, bold=True, color="FFFFFF")
-    font_datos = Font(name="Segoe UI", size=9, color="111827")
-    font_bold = Font(name="Segoe UI", size=9, bold=True, color="111827")
-    
-    fill_primario = PatternFill(start_color="1E3A8A", end_color="1E3A8A", fill_type="solid")
-    fill_secundario = PatternFill(start_color="F3F4F6", end_color="F3F4F6", fill_type="solid")
-    fill_totales = PatternFill(start_color="E5E7EB", end_color="E5E7EB", fill_type="solid")
-    
-    # Bordes negros limpios
-    borde_delgado = Border(
-        left=Side(style="thin", color="000000"),
-        right=Side(style="thin", color="000000"),
-        top=Side(style="thin", color="000000"),
-        bottom=Side(style="thin", color="000000")
-    )
-
-    def draw_header(ws, tab_name):
-        ws.views.sheetView[0].showGridLines = False
-        ws.merge_cells("A1:K1")
-        ws["A1"] = f"🏗️ ESTIMAPP | {tab_name} | Estimación #{estimacion_info.get('num_periodo', 1):02d}"
-        ws["A1"].font = font_titulo
-        ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
-        ws["A1"].border = borde_delgado
-        ws.row_dimensions[1].height = 30
-        
-        ws["A3"], ws["B3"] = "Proyecto / Obra:", proy_info.get("nombre_obra", "")
-        ws["A4"], ws["B4"] = "No. Contrato:", proy_info.get("contrato_no", "")
-        ws["A5"], ws["B5"] = "Ubicación:", proy_info.get("ubicacion", "")
-        ws["H3"], ws["I3"] = "Contratista:", proy_info.get("contratista", "")
-        ws["H4"], ws["I4"] = "Periodo:", f"{estimacion_info.get('periodo_inicio', '')} al {estimacion_info.get('periodo_fin', '')}"
-        ws["H5"], ws["I5"] = "Monto Contratado:", monto_contratado_total
-        ws["I5"].number_format = '"$"#,##0.00'
-        
-        for r in [3, 4, 5]:
-            ws[f"A{r}"].font = ws[f"H{r}"].font = font_bold
-            ws[f"B{r}"].font = ws[f"I{r}"].font = font_datos
-
-    # --- 1. RESUMEN FINANCIERO ---
-    ws_res = wb.active
-    ws_res.title = f"Resumen {mes_anio_corto}".strip()
-    draw_header(ws_res, "RESUMEN FINANCIERO")
-    
-    subtotal_est = sum(c['cant_periodo'] * c['pu'] for c in conceptos_procesados)
-    iva = subtotal_est * 0.16
-    total_liquido = subtotal_est + iva
-
-    bloque_finanzas = [
-        ("Subtotal de los Trabajos Ejecutados:", subtotal_est),
-        ("I.V.A. (16%):", iva),
-        ("Total Líquido a Pagar:", total_liquido)
-    ]
-    
-    fila_f = 8
-    for label, val in bloque_finanzas:
-        ws_res.merge_cells(start_row=fila_f, start_column=3, end_row=fila_f, end_column=6)
-        ws_res.cell(row=fila_f, column=3, value=label).font = font_bold
-        ws_res.cell(row=fila_f, column=3).alignment = Alignment(horizontal="right")
-        c_val = ws_res.cell(row=fila_f, column=7, value=val)
-        c_val.font = font_datos
-        c_val.number_format = '"$"#,##0.00'
-        c_val.border = borde_delgado
-        if "Líquido" in label:
-            c_val.fill = fill_totales
-            c_val.font = font_bold
-        fila_f += 2
-
-    # --- 2. ESTADO DE CUENTA ---
-    ws_cta = wb.create_sheet(f"Est Cta {mes_anio_corto}".strip())
-    draw_header(ws_cta, "ESTADO DE CUENTA HISTÓRICO")
-    
-    encabezados_cta = ["No. Est.", "Periodo de Estimación", "Subtotal Ejecutado", "I.V.A.", "Total Líquido"]
-    for col_idx, col_nombre in enumerate(encabezados_cta, start=1):
-        c = ws_cta.cell(row=7, column=col_idx, value=col_nombre)
-        c.font, c.fill, c.alignment, c.border = font_headers, fill_primario, Alignment(horizontal="center"), borde_delgado
-    
-    fila_c = 8
-    for est in sorted(estimaciones_dash, key=lambda x: x['num_periodo']):
-        if est['num_periodo'] > estimacion_info['num_periodo']: continue
-        meds = get_mediciones(est['id'])
-        subt = sum(float(m.get('cantidad_total') or 0.0) * float(next((c['precio_unitario'] for c in conceptos_cat if c['id'] == m.get('id_concepto')), 0)) for m in meds)
-        imp_iva = subt * 0.16
-        liquido = subt + imp_iva
-        
-        ws_cta.cell(row=fila_c, column=1, value=est['num_periodo']).alignment = Alignment(horizontal="center")
-        ws_cta.cell(row=fila_c, column=2, value=f"{est['periodo_inicio']} al {est['periodo_fin']}")
-        ws_cta.cell(row=fila_c, column=3, value=subt).number_format = '"$"#,##0.00'
-        ws_cta.cell(row=fila_c, column=4, value=imp_iva).number_format = '"$"#,##0.00'
-        ws_cta.cell(row=fila_c, column=5, value=liquido).number_format = '"$"#,##0.00'
-        
-        for col_idx in range(1, 6):
-            ws_cta.cell(row=fila_c, column=col_idx).font = font_datos
-            ws_cta.cell(row=fila_c, column=col_idx).border = borde_delgado
-        fila_c += 1
-
-    # --- 3. CUERPO DE ESTIMACIÓN ---
-    ws_gen = wb.create_sheet(f"Estimación {mes_anio_corto}".strip())
-    draw_header(ws_gen, "CUERPO DE ESTIMACIÓN Y AVANCES")
-    
-    columnas = ["Clave", "Descripción de Concepto", "Unidad", "P.U.", "Vol. Contrato", "Vol. Acum. Ant.", "Vol. Estimado", "Vol. Acum. Act.", "Vol. Faltante", "Importe Estimado", "% Avance"]
-    for col_idx, col_nombre in enumerate(columnas, start=1):
-        c = ws_gen.cell(row=7, column=col_idx, value=col_nombre)
-        c.font, c.fill, c.alignment, c.border = font_headers, fill_primario, Alignment(horizontal="center", vertical="center", wrap_text=True), borde_delgado
-        
-    fila_act = 8
-    for item in conceptos_procesados:
-        if item['cant_periodo'] <= 0 and item['cant_contratada'] == 0: continue
-        pu, vol_contrato = item['pu'], item['cant_contratada']
-        vol_ant, vol_est, vol_act = item['cant_anterior'], item['cant_periodo'], item['cant_acumulada']
-        
-        ws_gen.cell(row=fila_act, column=1, value=item['clave']).alignment = Alignment(horizontal="center")
-        ws_gen.cell(row=fila_act, column=2, value=item['descripcion']).alignment = Alignment(wrap_text=True)
-        ws_gen.cell(row=fila_act, column=3, value=item['unidad']).alignment = Alignment(horizontal="center")
-        ws_gen.cell(row=fila_act, column=4, value=pu).number_format = '"$"#,##0.00'
-        ws_gen.cell(row=fila_act, column=5, value=vol_contrato).number_format = '#,##0.00'
-        ws_gen.cell(row=fila_act, column=6, value=vol_ant).number_format = '#,##0.00'
-        ws_gen.cell(row=fila_act, column=7, value=vol_est).number_format = '#,##0.00'
-        ws_gen.cell(row=fila_act, column=8, value=vol_act).number_format = '#,##0.00'
-        ws_gen.cell(row=fila_act, column=9, value=vol_contrato - vol_act).number_format = '#,##0.00'
-        ws_gen.cell(row=fila_act, column=10, value=vol_est * pu).number_format = '"$"#,##0.00'
-        ws_gen.cell(row=fila_act, column=11, value=(vol_act/vol_contrato) if vol_contrato > 0 else 0).number_format = '0.00%'
-        
-        for col_idx in range(1, 12):
-            cell = ws_gen.cell(row=fila_act, column=col_idx)
-            cell.font, cell.border = font_datos, borde_delgado
-            if fila_act % 2 == 0: cell.fill = fill_secundario
-        fila_act += 1
-        
-    # --- 4. REPORTE FOTOGRÁFICO ---
-    ws_fotos = wb.create_sheet(f"Fotos {mes_anio_corto}".strip())
-    draw_header(ws_fotos, "EVIDENCIA FOTOGRÁFICA")
-    
-    fila_foto = 8
-    col_foto = 2
-    for m in mediciones_actual:
-        if m.get('url_foto') or m.get('url_croquis'):
-            c_ref = next((c for c in conceptos_cat if c['id'] == m['id_concepto']), {})
-            desc_base = f"{c_ref.get('clave', '')} - {m.get('localizacion', '')}"
-            urls = []
-            if m.get('url_foto'): urls.append((m['url_foto'], desc_base))
-            if m.get('url_croquis'): urls.append((m['url_croquis'], f"{desc_base} (Croquis)"))
-            
-            for url, desc in urls:
-                try:
-                    resp = requests.get(url, timeout=10)
-                    if resp.status_code == 200:
-                        img = OpenpyxlImage(io.BytesIO(resp.content))
-                        img.width, img.height = 320, 240
-                        ws_fotos.add_image(img, f"{get_column_letter(col_foto)}{fila_foto}")
-                        
-                        celda_texto = ws_fotos.cell(row=fila_foto + 13, column=col_foto, value=desc)
-                        celda_texto.font = font_bold
-                        celda_texto.border = borde_delgado
-                        
-                        col_foto += 5
-                        if col_foto > 7:
-                            col_foto = 2
-                            fila_foto += 16
-                except: pass
-
-    # Ajustes globales de anchos
-    for ws_ajuste in [ws_res, ws_cta, ws_gen, ws_fotos]:
-        ws_ajuste.column_dimensions['A'].width = 12
-        ws_ajuste.column_dimensions['B'].width = 45
-        ws_ajuste.column_dimensions['C'].width = 12
-        for col_letter in ['D', 'E', 'F', 'G', 'H', 'I', 'J', 'K']: ws_ajuste.column_dimensions[col_letter].width = 15
-
-    output = io.BytesIO()
-    wb.save(output)
-    output.seek(0)
-    return output.getvalue()
-
-
-# =============================================================
-# MOTOR DE GENERACIÓN DE REPORTE EJECUTIVO EN PDF
-# =============================================================
-@st.cache_data(show_spinner=False)
-def generar_pdf_resumen_ejecutivo(proy_info, monto_cont, monto_est, saldo_ejercer, pct_global, df_conceptos):
-    pdf_buffer = io.BytesIO()
-    doc = SimpleDocTemplate(
-        pdf_buffer,
-        pagesize=letter,
-        rightMargin=36,
-        leftMargin=36,
-        topMargin=36,
-        bottomMargin=36
-    )
-    story = []
-    styles = getSampleStyleSheet()
-
-    title_style = ParagraphStyle(
-        'DocTitle',
-        parent=styles['Heading1'],
-        fontSize=15,
-        leading=18,
-        textColor=colors.HexColor("#1A2530"),
-        spaceAfter=2,
-        fontName="Helvetica-Bold"
-    )
-    subtitle_style = ParagraphStyle(
-        'DocSubtitle',
-        parent=styles['Normal'],
-        fontSize=8,
-        leading=10,
-        textColor=colors.HexColor("#555555"),
-        spaceAfter=10
-    )
-    table_text = ParagraphStyle(
-        'TableText',
-        parent=styles['Normal'],
-        fontSize=7,
-        leading=9,
-        textColor=colors.HexColor("#222222")
-    )
-    table_head = ParagraphStyle(
-        'TableHead',
-        parent=styles['Normal'],
-        fontSize=7,
-        leading=9,
-        textColor=colors.white,
-        fontName="Helvetica-Bold"
-    )
-
-    story.append(Paragraph("ESTIMAPP | INFORME EJECUTIVO DE CONTROL PRESUPUESTAL", title_style))
-    story.append(Paragraph(f"Fecha de corte y emisión: {datetime.datetime.now().strftime('%d/%m/%Y %H:%M')} | Sistema Central de Estimaciones", subtitle_style))
-
-    # 1. Ficha técnica del proyecto
-    info_data = [
-        [
-            Paragraph("<b>Obra:</b>", table_text),
-            Paragraph(f"{proy_info.get('nombre_obra', 'N/D')}", table_text),
-            Paragraph("<b>Contrato N°:</b>", table_text),
-            Paragraph(f"{proy_info.get('contrato_no', 'S/N')}", table_text)
-        ],
-        [
-            Paragraph("<b>Ubicación:</b>", table_text),
-            Paragraph(f"{proy_info.get('ubicacion', 'N/D')}", table_text),
-            Paragraph("<b>Licitación:</b>", table_text),
-            Paragraph(f"{proy_info.get('concurso_no', 'S/N')}", table_text)
-        ],
-        [
-            Paragraph("<b>Contratista:</b>", table_text),
-            Paragraph(f"{proy_info.get('contratista', 'N/D')}", table_text),
-            Paragraph("<b>Unidad:</b>", table_text),
-            Paragraph(f"{proy_info.get('unidad', 'N/D')}", table_text)
-        ],
-        [
-            Paragraph("<b>Residente:</b>", table_text),
-            Paragraph(f"{proy_info.get('residente_obra', 'N/D')}", table_text),
-            Paragraph("<b>Alcance:</b>", table_text),
-            Paragraph(f"{proy_info.get('descripcion_sintetica', 'General')[:50]}...", table_text)
-        ]
-    ]
-    t_info = Table(info_data, colWidths=[65, 230, 75, 170])
-    t_info.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,-1), colors.HexColor("#F8FAFC")),
-        ('BOX', (0,0), (-1,-1), 1, colors.HexColor("#CBD5E1")),
-        ('INNERGRID', (0,0), (-1,-1), 0.5, colors.HexColor("#E2E8F0")),
-        ('TOPPADDING', (0,0), (-1,-1), 3),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 3),
-    ]))
-    story.append(t_info)
-    story.append(Spacer(1, 8))
-
-    # 2. Métricas Financieras (KPIs)
-    kpi_data = [
-        [
-            Paragraph(f"<para align=center><b>Monto Contratado Total</b><br/><font size=10 color='#1A2530'><b>${monto_cont:,.2f}</b></font></para>", table_text),
-            Paragraph(f"<para align=center><b>Monto Estimado Acumulado</b><br/><font size=10 color='#00875A'><b>${monto_est:,.2f}</b></font></para>", table_text),
-            Paragraph(f"<para align=center><b>Saldo por Ejercer</b><br/><font size=10 color='#D32F2F'><b>${saldo_ejercer:,.2f}</b></font></para>", table_text),
-            Paragraph(f"<para align=center><b>Avance Global</b><br/><font size=10 color='#0288D1'><b>{pct_global:.2f}%</b></font></para>", table_text)
-        ]
-    ]
-    t_kpi = Table(kpi_data, colWidths=[135, 135, 135, 135])
-    t_kpi.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,-1), colors.white),
-        ('BOX', (0,0), (-1,-1), 1.2, colors.HexColor("#00875A")),
-        ('INNERGRID', (0,0), (-1,-1), 0.5, colors.HexColor("#E2E8F0")),
-        ('TOPPADDING', (0,0), (-1,-1), 5),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 5),
-    ]))
-    story.append(t_kpi)
-    story.append(Spacer(1, 8))
-
-    # 3. Gráfica en memoria
-    fig, ax = plt.subplots(figsize=(7.2, 1.0), dpi=150)
-    cats = ['Balance Contractual']
-    ax.barh(cats, [monto_est], color='#00875A', height=0.45, label=f'Ejercido (${monto_est:,.2f} - {pct_global:.1f}%)')
-    ax.barh(cats, [saldo_ejercer], left=[monto_est], color='#CBD5E1', height=0.45, label=f'Saldo (${saldo_ejercer:,.2f})')
-    limite = max(monto_cont * 1.05, 1.0)
-    ax.set_xlim(0, limite)
-    ax.set_xlabel('Monto en MXN', fontsize=7)
-    ax.legend(loc='lower center', bbox_to_anchor=(0.5, 1.01), ncol=2, frameon=False, fontsize=7)
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    ax.spines['left'].set_visible(False)
-    ax.tick_params(axis='both', which='both', labelsize=7, left=False)
-    plt.tight_layout()
-
-    chart_buf = io.BytesIO()
-    plt.savefig(chart_buf, format='png', bbox_inches='tight')
-    plt.close(fig)
-    chart_buf.seek(0)
-    story.append(RLImage(chart_buf, width=540, height=75))
-    story.append(Spacer(1, 8))
-
-    # 4. Tabla consolidada de conceptos
-    table_rows = [
-        [
-            Paragraph("<para align=center>#</para>", table_head),
-            Paragraph("<para align=center>Clave</para>", table_head),
-            Paragraph("<para align=center>Und</para>", table_head),
-            Paragraph("<para align=center>Cant. Cont.</para>", table_head),
-            Paragraph("<para align=center>Cant. Est.</para>", table_head),
-            Paragraph("<para align=center>P.U. ($)</para>", table_head),
-            Paragraph("<para align=center>Importe Est. ($)</para>", table_head),
-            Paragraph("<para align=center>Saldo Fin. ($)</para>", table_head),
-            Paragraph("<para align=center>% Avance</para>", table_head),
-        ]
-    ]
-
-    for idx, row in df_conceptos.iterrows():
-        p_avance = float(row.get("% Avance", 0.0))
-        color_pct = "#D32F2F" if p_avance > 100.0 else "#00875A"
-        table_rows.append([
-            Paragraph(f"<para align=center>{idx+1}</para>", table_text),
-            Paragraph(f"{row.get('Clave', '')}", table_text),
-            Paragraph(f"<para align=center>{row.get('Unidad', '')}</para>", table_text),
-            Paragraph(f"<para align=right>{float(row.get('Cant. Contratada', 0)):,.2f}</para>", table_text),
-            Paragraph(f"<para align=right>{float(row.get('Cant. Acumulada', 0)):,.2f}</para>", table_text),
-            Paragraph(f"<para align=right>${float(row.get('P.U. ($)', 0)):,.2f}</para>", table_text),
-            Paragraph(f"<para align=right>${float(row.get('Importe Acumulado ($)', 0)):,.2f}</para>", table_text),
-            Paragraph(f"<para align=right>${float(row.get('Saldo Financiero ($)', 0)):,.2f}</para>", table_text),
-            Paragraph(f"<para align=center><font color='{color_pct}'><b>{p_avance:.1f}%</b></font></para>", table_text),
-        ])
-
-    t_table = Table(table_rows, colWidths=[23, 72, 35, 65, 65, 60, 75, 75, 70], repeatRows=1)
-    t_table.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1A2530")),
-        ('INNERGRID', (0,0), (-1,-1), 0.5, colors.HexColor("#E2E8F0")),
-        ('BOX', (0,0), (-1,-1), 1, colors.HexColor("#94A3B8")),
-        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-        ('TOPPADDING', (0,0), (-1,-1), 2.5),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 2.5),
-    ]))
-    story.append(t_table)
-    story.append(Spacer(1, 15))
-
-    # 5. Cuadro oficial de firmas
-    residente_nom = proy_info.get('residente_obra') or 'Supervisión de Obra'
-    contratista_nom = proy_info.get('contratista') or 'Contratista'
-    sig_data = [
-        [
-            Paragraph(f"<para align=center>____________________________________<br/><b>{residente_nom}</b><br/>Residente de Obra / Supervisión</para>", table_text),
-            Paragraph(f"<para align=center>____________________________________<br/><b>{contratista_nom}</b><br/>Empresa Contratista</para>", table_text)
-        ]
-    ]
-    t_sig = Table(sig_data, colWidths=[270, 270])
-    t_sig.setStyle(TableStyle([
-        ('TOPPADDING', (0,0), (-1,-1), 15),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 5),
-    ]))
-    story.append(KeepTogether(t_sig))
-
-    doc.build(story)
-    return pdf_buffer.getvalue()
-
-keys = ["del_proy_counter", "del_conc_counter", "del_est_counter", "del_med_counter", "cap_counter", "dim_counter", "bib_del_counter", "up_bib_key", "up_proy_key", "ms_lote_key", "new_cat_key"]
-for k in keys:
-    if k not in st.session_state: st.session_state[k] = 0
-
-# -------------------------------------------------------------
-# DEFINICIÓN DE PESTAÑAS
-# -------------------------------------------------------------
 tab_dashboard, tab_captura, tab_estimaciones, tab_catalogo, tab_biblioteca, tab_proyectos = st.tabs([
     "📊 Control Presupuestal", "📐 Captura en Campo", "📑 Estimaciones", 
     "📚 Catálogo del Proyecto", "📖 Biblioteca Maestra de Conceptos", "🏢 Proyectos"
 ])
 
-lista_proyectos = get_proyectos()
+lista_proyectos = get_proyectos(user_id)
 proyectos_dict = {p["nombre_obra"]: p["id"] for p in lista_proyectos} if lista_proyectos else {}
 
 # -------------------------------------------------------------
-# TAB 1: CONTROL PRESUPUESTAL (DASHBOARD + REPORTE PDF EJECUTIVO)
+# TAB 1: CONTROL PRESUPUESTAL (DASHBOARD)
 # -------------------------------------------------------------
 with tab_dashboard:
-    st.subheader("Control Presupuestal y Balance Contractual")
+    st.markdown("### Control Presupuestal y Balance Contractual 🔗")
     if not proyectos_dict: st.info("Registra un proyecto para visualizar el análisis financiero.")
     else:
         proy_sel_dash = st.selectbox("Proyecto a Auditar", list(proyectos_dict.keys()), key="dash_proy")
@@ -942,19 +270,14 @@ with tab_dashboard:
                     st.markdown("##### Desglose por Estimación y Concepto (Auditoría Integral de Avance):")
                 with col_btn_pdf:
                     pdf_bytes = generar_pdf_resumen_ejecutivo(
-                        proy_info=proy_obj_actual,
-                        monto_cont=monto_contratado_total,
-                        monto_est=monto_estimado_global,
-                        saldo_ejercer=saldo_por_ejercer,
-                        pct_global=pct_global,
-                        df_conceptos=df_dash
+                        proy_info=proy_obj_actual, monto_cont=monto_contratado_total,
+                        monto_est=monto_estimado_global, saldo_ejercer=saldo_por_ejercer,
+                        pct_global=pct_global, df_conceptos=df_dash
                     )
                     st.download_button(
-                        label="📄 Exportar Resumen Ejecutivo (PDF)",
-                        data=pdf_bytes,
+                        label="📄 Exportar Resumen Ejecutivo (PDF)", data=pdf_bytes,
                         file_name=f"Resumen_Ejecutivo_{proy_obj_actual.get('contrato_no', 'Obra')}.pdf",
-                        mime="application/pdf",
-                        use_container_width=True
+                        mime="application/pdf", use_container_width=True
                     )
 
                 st.dataframe(
@@ -1170,7 +493,7 @@ with tab_captura:
                     borrar_todas_meds = st.checkbox("⚠️ Selecciona para eliminar todas las mediciones mostradas en la tabla.", key=f"chk_todas_meds_{st.session_state.del_med_counter}")
                     if borrar_todas_meds: meds_a_borrar_labels = list(meds_borrar_dict.keys())
 
-                    if st.button("Eliminar Seleccionadas", type="primary", disabled=len(meds_a_borrar_labels)==0, key="btn_del_meds_bulk"):
+                    if st.button("Eliminar Seleccionadas", type="primary", disabled=len(meds_a_borrar_labels)==0, key=f"btn_del_meds_bulk_{st.session_state.del_med_counter}"):
                         ids_to_delete, archivos_a_borrar = [], []
                         for label in meds_a_borrar_labels:
                             obj_med_borrar = meds_borrar_dict[label]
@@ -1246,17 +569,12 @@ with tab_estimaciones:
             df_e = pd.DataFrame(estimaciones_proyecto)
             df_e.insert(0, "#", range(1, len(df_e) + 1))
             df_editor_data = df_e[["#", "num_periodo", "periodo_inicio", "periodo_fin", "estado"]].copy()
-            df_editor_data["num_periodo"] = pd.to_numeric(df_editor_data["num_periodo"], errors="coerce").fillna(1).astype(int)
-            df_editor_data["periodo_inicio"] = pd.to_datetime(df_editor_data["periodo_inicio"], errors="coerce").dt.date
-            df_editor_data["periodo_fin"] = pd.to_datetime(df_editor_data["periodo_fin"], errors="coerce").dt.date
-            df_editor_data["estado"] = df_editor_data["estado"].fillna("borrador").astype(str)
 
             edited_table = st.data_editor(
                 df_editor_data,
                 column_config={
                     "estado": st.column_config.SelectboxColumn("Estado de la Estimación", width="medium", options=["borrador", "en_revision", "aprobada"], required=True),
                     "#": st.column_config.NumberColumn("#", disabled=True), "num_periodo": st.column_config.NumberColumn("N° Periodo", disabled=True),
-                    "periodo_inicio": st.column_config.DateColumn("Fecha Inicio", format="YYYY-MM-DD"), "periodo_fin": st.column_config.DateColumn("Fecha Fin", format="YYYY-MM-DD"),
                 },
                 hide_index=True, use_container_width=True, key="editor_estimaciones"
             )
@@ -1272,19 +590,12 @@ with tab_estimaciones:
                     st.toast("✅ Estimación actualizada.")
                     st.rerun()
 
-            # --- MODULO DE EXPORTACIÓN OFICIAL EXCEL (INYECCIÓN PURA) ---
             st.markdown("---")
             st.markdown("##### 📥 Exportación Oficial (Formatos Institucionales y Libre)")
             col_exp_1, col_exp_2, col_exp_3 = st.columns([2, 1, 1])
             
-            est_a_descargar = col_exp_1.selectbox(
-                "Seleccionar Estimación a Exportar:", 
-                [f"Estimación #{e['num_periodo']} (Del {e['periodo_inicio']} al {e['periodo_fin']})" for e in estimaciones_proyecto]
-            )
-            formato_institucion = col_exp_2.selectbox(
-                "Formato de Salida:", 
-                ["IMSS", "Poder Judicial de la Federación", "Formato Estimapp (Libre)"]
-            )
+            est_a_descargar = col_exp_1.selectbox("Estimación a Exportar:", [f"Estimación #{e['num_periodo']} (Del {e['periodo_inicio']} al {e['periodo_fin']})" for e in estimaciones_proyecto])
+            formato_institucion = col_exp_2.selectbox("Formato de Salida:", ["IMSS", "Poder Judicial de la Federación", "Formato Estimapp (Libre)"])
             proy_obj_actual = next((p for p in lista_proyectos if p["id"] == id_proy_est), {})
             
             with col_exp_3:
@@ -1296,35 +607,27 @@ with tab_estimaciones:
                 est_obj_actual = estimaciones_proyecto[idx_est_sel]
                 conceptos_cat = get_conceptos(id_proy_est)
                 
-                with st.spinner("Compilando arquitectura matemática y generando archivo..."):
+                with st.spinner("Generando archivo..."):
                     try:
                         if formato_institucion == "IMSS":
                             plantilla_bytes = descargar_plantilla_supabase("plantillas", "plantilla_maestra_estimacion_imss.xlsx")
                             xlsx_generado = inyectar_datos_excel_imss(plantilla_bytes, proy_obj_actual, est_obj_actual, conceptos_cat, estimaciones_proyecto)
-                            st.session_state["xls_name"] = f"Estimacion_{est_obj_actual['num_periodo']}_IMSS_{proy_obj_actual.get('contrato_no', 'Obra')}.xlsx"
-                        
+                            st.session_state["xls_name"] = f"Estimacion_{est_obj_actual['num_periodo']}_IMSS.xlsx"
                         elif formato_institucion == "Poder Judicial de la Federación":
                             plantilla_bytes = descargar_plantilla_supabase("plantillas", "plantilla_maestra_estimacion_pjf.xlsx")
                             xlsx_generado = inyectar_datos_excel_pjf(plantilla_bytes, proy_obj_actual, est_obj_actual, conceptos_cat, estimaciones_proyecto)
-                            st.session_state["xls_name"] = f"Estimacion_{est_obj_actual['num_periodo']}_PJF_{proy_obj_actual.get('contrato_no', 'Obra')}.xlsx"
-                        
-                        elif formato_institucion == "Formato Estimapp (Libre)":
+                            st.session_state["xls_name"] = f"Estimacion_{est_obj_actual['num_periodo']}_PJF.xlsx"
+                        else:
                             xlsx_generado = generar_excel_estimapp(proy_obj_actual, est_obj_actual, conceptos_cat, estimaciones_proyecto)
-                            st.session_state["xls_name"] = f"Estimacion_{est_obj_actual['num_periodo']}_Estimapp_{proy_obj_actual.get('contrato_no', 'Obra')}.xlsx"
+                            st.session_state["xls_name"] = f"Estimacion_{est_obj_actual['num_periodo']}_Estimapp.xlsx"
 
                         st.session_state["xls_buffer"] = xlsx_generado
-                        st.success("✅ Archivo procesado y listo. Haz clic en el botón de abajo para descargarlo.")
+                        st.success("✅ Archivo listo para descarga.")
                     except Exception as e:
-                        st.error(f"Error al generar el formato: {e}")
+                        st.error(f"Error: {e}")
 
             if st.session_state.get("xls_buffer"):
-                st.download_button(
-                    label=f"⬇️ Descargar {st.session_state['xls_name']}",
-                    data=st.session_state["xls_buffer"],
-                    file_name=st.session_state["xls_name"],
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True
-                )
+                st.download_button("⬇️ Descargar Archivo", data=st.session_state["xls_buffer"], file_name=st.session_state["xls_name"], mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
 
 # -------------------------------------------------------------
 # TAB 4: CATÁLOGO DEL PROYECTO
@@ -1336,9 +639,9 @@ with tab_catalogo:
         proy_sel = st.selectbox("Seleccionar Proyecto Destino", list(proyectos_dict.keys()), key="cat_proy_2")
         proy_id = proyectos_dict[proy_sel]
 
-        categorias_disp = get_biblioteca_categorias()
-        cat_sel = st.selectbox("Filtro de Categoría (Para importaciones de Biblioteca):", categorias_disp, key="sel_cat_bib_2")
-        conceptos_bib = get_biblioteca_conceptos(cat_sel)
+        categorias_disp = get_biblioteca_instituciones(user_id)
+        cat_sel = st.selectbox("Institución maestra (Para importar):", categorias_disp, key="sel_cat_bib_2")
+        conceptos_bib = get_biblioteca_conceptos(cat_sel, user_id)
 
         col_import1, col_import2 = st.columns(2)
 
@@ -1347,14 +650,17 @@ with tab_catalogo:
                 if not conceptos_bib: st.info(f"No hay conceptos en '{cat_sel}'.")
                 else:
                     opciones_lote = {f"{c['clave']} — {c['descripcion'][:60]}...": c for c in conceptos_bib}
-                    seleccionados_lote = st.multiselect("Seleccionar múltiples conceptos:", list(opciones_lote.keys()), key=f"ms_lote_{st.session_state.ms_lote_key}")
+                    seleccionados_lote = st.multiselect("Seleccionar conceptos:", list(opciones_lote.keys()), key=f"ms_lote_{st.session_state.ms_lote_key}")
                     if st.button("📥 Importar Seleccionados", type="primary") and seleccionados_lote:
                         registros_a_insertar = []
                         for sel in seleccionados_lote:
                             c_ref = opciones_lote[sel]
                             registros_a_insertar.append({
-                                "id_proyecto": proy_id, "especialidad": c_ref.get("especialidad", ""),
-                                "clave": c_ref["clave"], "descripcion": c_ref["descripcion"], "unidad": normalizar_unidad(c_ref["unidad"]),
+                                "id_proyecto": proy_id, 
+                                "especialidad": c_ref.get("especialidad", ""),
+                                "categoria": c_ref.get("categoria", ""),
+                                "clave": c_ref["clave"], "descripcion": c_ref["descripcion"], 
+                                "unidad": normalizar_unidad(c_ref["unidad"]),
                                 "cantidad_contratada": 0.0, "precio_unitario": float(c_ref.get("precio_referencial") or 0.0)
                             })
                         if registros_a_insertar:
@@ -1376,7 +682,8 @@ with tab_catalogo:
                         if st.form_submit_button("➕ Agregar al Contrato"):
                             supabase.table("catalogo_conceptos").insert({
                                 "id_proyecto": proy_id, "especialidad": obj_u.get("especialidad"),
-                                "clave": obj_u["clave"], "descripcion": obj_u["descripcion"], "unidad": normalizar_unidad(obj_u["unidad"]),
+                                "categoria": obj_u.get("categoria"), "clave": obj_u["clave"], 
+                                "descripcion": obj_u["descripcion"], "unidad": normalizar_unidad(obj_u["unidad"]),
                                 "cantidad_contratada": cant_u, "precio_unitario": pu_u
                             }).execute()
                             get_conceptos.clear()
@@ -1385,12 +692,12 @@ with tab_catalogo:
 
         with col_import2:
             with st.expander("📂 Subir desde Excel (Carga Masiva al Contrato)"):
-                st.download_button("📥 Descargar Plantilla Oficial Excel", data=generar_plantilla_excel("proyecto"), file_name="Plantilla_Catalogo_Proyecto.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-                excel_proy = st.file_uploader("Sube la plantilla llena:", type=["xlsx"], key=f"up_proy_{st.session_state.up_proy_key}")
+                st.download_button("📥 Descargar Plantilla Oficial Excel", data=generar_plantilla_excel("proyecto"), file_name=f"Plantilla_Cat_Proyecto_{ts_descarga}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                excel_proy = st.file_uploader("Sube plantilla llena:", type=["xlsx"], key=f"up_proy_{st.session_state.up_proy_key}")
                 if excel_proy and st.button("Subir e Insertar al Proyecto", type="primary"):
                     try:
                         df_up = pd.read_excel(excel_proy)
-                        expected = ["Especialidad", "Clave", "Descripcion", "Unidad", "Cantidad_Contratada", "Precio_Unitario"]
+                        expected = ["Especialidad (Opcional)", "Categoria (Opcional)", "Clave", "Descripcion", "Unidad", "Cantidad_Contratada", "Precio_Unitario"]
                         if not all(col in df_up.columns for col in expected): st.error("⚠️ Formato incorrecto. Extrae la plantilla base primero.")
                         else:
                             df_up = df_up.fillna("")
@@ -1399,9 +706,10 @@ with tab_catalogo:
                             records = []
                             for _, row in df_up.iterrows():
                                 records.append({
-                                    "id_proyecto": proy_id, "especialidad": str(row["Especialidad"]).strip(),
-                                    "clave": str(row["Clave"]).strip(), "descripcion": str(row["Descripcion"]).strip(),
-                                    "unidad": normalizar_unidad(str(row["Unidad"])), "cantidad_contratada": float(row["Cantidad_Contratada"]), "precio_unitario": float(row["Precio_Unitario"])
+                                    "id_proyecto": proy_id, "especialidad": str(row["Especialidad (Opcional)"]).strip(),
+                                    "categoria": str(row["Categoria (Opcional)"]).strip(), "clave": str(row["Clave"]).strip(), 
+                                    "descripcion": str(row["Descripcion"]).strip(), "unidad": normalizar_unidad(str(row["Unidad"])), 
+                                    "cantidad_contratada": float(row["Cantidad_Contratada"]), "precio_unitario": float(row["Precio_Unitario"])
                                 })
                             for chunk in [records[i:i+50] for i in range(0, len(records), 50)]:
                                 supabase.table("catalogo_conceptos").insert(chunk).execute()
@@ -1413,7 +721,8 @@ with tab_catalogo:
 
             with st.expander("➕ Alta manual (Concepto Extraordinario)"):
                 with st.form("form_concepto_manual", clear_on_submit=True):
-                    esp_m = st.text_input("Especialidad", placeholder="Ej: 01 PRELIMINARES")
+                    esp_m = st.text_input("Especialidad (Opcional)", placeholder="Ej: 01 PRELIMINARES")
+                    cat_m = st.text_input("Categoría / Partida (Opcional)", placeholder="Ej: 1.1")
                     clave_m = st.text_input("Clave de Concepto *", placeholder="Ej: OC01-015-126")
                     unidad_m = st.selectbox("Unidad", unidades_list)
                     desc_m = st.text_area("Descripción detallada *", placeholder="Ingrese la descripción completa...")
@@ -1422,11 +731,12 @@ with tab_catalogo:
                     pu_m = c_pu_m.number_input("Precio Unitario ($)", min_value=0.0, value=0.0, step=10.0)
                     
                     if st.form_submit_button("Guardar en Catálogo"):
-                        if not clave_m.strip() or not desc_m.strip(): st.error("Clave y descripción son obligatorias.")
+                        if not clave_m.strip() or not desc_m.strip(): st.error("Clave y descripción obligatorias.")
                         else:
                             supabase.table("catalogo_conceptos").insert({
-                                "id_proyecto": proy_id, "especialidad": esp_m.strip(), "clave": clave_m.strip(),
-                                "descripcion": desc_m.strip(), "unidad": normalizar_unidad(unidad_m), "cantidad_contratada": cant_m, "precio_unitario": pu_m
+                                "id_proyecto": proy_id, "especialidad": esp_m.strip(), "categoria": cat_m.strip(),
+                                "clave": clave_m.strip(), "descripcion": desc_m.strip(), "unidad": normalizar_unidad(unidad_m), 
+                                "cantidad_contratada": cant_m, "precio_unitario": pu_m
                             }).execute()
                             get_conceptos.clear()
                             st.success("✅ Guardado exitosamente.")
@@ -1440,18 +750,17 @@ with tab_catalogo:
             conc_a_borrar_labels = st.multiselect("Seleccionar conceptos:", list(dict_conc_borrar.keys()), key=f"del_conc_sel_{st.session_state.del_conc_counter}")
             borrar_todos_conc = st.checkbox("⚠️ Selecciona para eliminar todos los conceptos mostrados en la tabla.", key=f"chk_todos_conc_{st.session_state.del_conc_counter}")
             if borrar_todos_conc: conc_a_borrar_labels = list(dict_conc_borrar.keys())
-            
-            if st.button("Eliminar Seleccionados", type="primary", disabled=len(conc_a_borrar_labels)==0, key="btn_del_cat_bulk"):
+
+            if st.button("Eliminar Seleccionados", type="primary", disabled=len(conc_a_borrar_labels)==0, key=f"btn_del_cat_bulk_{st.session_state.del_conc_counter}"):
                 ids_to_delete = [dict_conc_borrar[label]["id"] for label in conc_a_borrar_labels]
                 if ids_to_delete:
                     for chunk in [ids_to_delete[i:i+50] for i in range(0, len(ids_to_delete), 50)]:
                         supabase.table("mediciones_campo").delete().in_("id_concepto", chunk).execute()
                         supabase.table("catalogo_conceptos").delete().in_("id", chunk).execute()
-                    
                 get_conceptos.clear()
                 get_mediciones.clear()
                 st.session_state.del_conc_counter += 1
-                st.success(f"{len(ids_to_delete)} conceptos y sus mediciones han sido eliminados.")
+                st.success(f"{len(ids_to_delete)} conceptos eliminados.")
                 st.rerun()
 
         if conceptos_proyecto:
@@ -1459,31 +768,37 @@ with tab_catalogo:
             st.caption("💡 *Haz doble clic sobre cualquier celda (clave, descripción, unidad, cantidad o precio) para modificarla directamente.*")
             df_c = pd.DataFrame(conceptos_proyecto)
             df_c.insert(0, "#", range(1, len(df_c) + 1))
-            df_c["cantidad_contratada"] = pd.to_numeric(df_c["cantidad_contratada"], errors="coerce").fillna(0.0).astype(float)
-            df_c["precio_unitario"] = pd.to_numeric(df_c["precio_unitario"], errors="coerce").fillna(0.0).astype(float)
-
+            
+            # Limpieza de valores vacíos
+            df_c["categoria"] = df_c["categoria"].fillna("").astype(str)
+            df_c["especialidad"] = df_c["especialidad"].fillna("").astype(str)
+            
             edited_catalogo = st.data_editor(
-                df_c[["#", "clave", "especialidad", "unidad", "cantidad_contratada", "precio_unitario", "descripcion"]],
+                df_c[["#", "clave", "especialidad", "categoria", "unidad", "cantidad_contratada", "precio_unitario", "descripcion"]],
                 column_config={
-                    "#": st.column_config.NumberColumn("#", disabled=True), "clave": st.column_config.TextColumn("Clave"),
-                    "especialidad": st.column_config.TextColumn("Especialidad"), "unidad": st.column_config.SelectboxColumn("Unidad", options=unidades_list),
+                    "#": st.column_config.NumberColumn("#", disabled=True),
+                    "clave": st.column_config.TextColumn("Clave"),
+                    "especialidad": st.column_config.TextColumn("Especialidad"),
+                    "categoria": st.column_config.TextColumn("Categoría"),
+                    "unidad": st.column_config.SelectboxColumn("Unidad", options=unidades_list),
                     "cantidad_contratada": st.column_config.NumberColumn("Cant. Contratada", min_value=0.0, step=1.0),
                     "precio_unitario": st.column_config.NumberColumn("P.U. ($)", format="$%.2f", min_value=0.0, step=10.0),
                     "descripcion": st.column_config.TextColumn("Descripción")
                 },
-                use_container_width=True, hide_index=True, key="editor_catalogo"
+                use_container_width=True,
+                hide_index=True,
+                key="editor_catalogo"
             )
 
             if "editor_catalogo" in st.session_state and st.session_state["editor_catalogo"].get("edited_rows", {}):
                 for row_str, col_vals in st.session_state["editor_catalogo"]["edited_rows"].items():
                     id_conc_mod = conceptos_proyecto[int(row_str)]["id"]
                     up_payload = {}
-                    if "clave" in col_vals: up_payload["clave"] = col_vals["clave"].strip()
-                    if "especialidad" in col_vals: up_payload["especialidad"] = col_vals["especialidad"].strip()
+                    for campo in ["clave", "especialidad", "categoria", "descripcion"]:
+                        if campo in col_vals: up_payload[campo] = str(col_vals[campo]).strip()
                     if "unidad" in col_vals: up_payload["unidad"] = normalizar_unidad(col_vals["unidad"])
                     if "cantidad_contratada" in col_vals: up_payload["cantidad_contratada"] = float(col_vals["cantidad_contratada"])
                     if "precio_unitario" in col_vals: up_payload["precio_unitario"] = float(col_vals["precio_unitario"])
-                    if "descripcion" in col_vals: up_payload["descripcion"] = col_vals["descripcion"].strip()
                     supabase.table("catalogo_conceptos").update(up_payload).eq("id", id_conc_mod).execute()
                     get_conceptos.clear()
                     st.toast("✅ Concepto actualizado.")
@@ -1493,83 +808,124 @@ with tab_catalogo:
 # TAB 5: BIBLIOTECA MAESTRA GLOBAL
 # -------------------------------------------------------------
 with tab_biblioteca:
-    st.subheader("📖 Biblioteca Maestra de Conceptos (Global)")
+    st.markdown("### 📖 Biblioteca Maestra de Conceptos (Global)")
     st.caption("Administra el tabulador institucional de precios y claves para usar en múltiples contratos.")
     
-    cats_bib = get_biblioteca_categorias()
+    cats_bib = get_biblioteca_instituciones(user_id)
+    idx_cat_activa = cats_bib.index(st.session_state.cat_activa) if st.session_state.cat_activa in cats_bib else 0
     
     col_b1, col_b2 = st.columns(2)
     with col_b1:
         with st.container(border=True):
-            st.markdown("**1. Selecciona o elimina una categoría existente:**")
+            st.markdown("**1. Selecciona o elimina una institución:**")
             c_bc1, c_bc2 = st.columns([3, 1])
-            cat_bib_sel = c_bc1.selectbox("Institución:", cats_bib, key="sel_cat_admin", label_visibility="collapsed")
-            c_bc2.button("Eliminar", type="primary", use_container_width=True, on_click=eliminar_categoria_callback)
+            cat_bib_sel = c_bc1.selectbox("Institución:", cats_bib, index=idx_cat_activa, label_visibility="collapsed")
+            st.session_state["cat_activa"] = cat_bib_sel
+
+            if c_bc2.button("Eliminar", type="primary", use_container_width=True):
+                if cat_bib_sel:
+                    supabase.table("instituciones").delete().eq("nombre", cat_bib_sel).execute()
+                    supabase.table("biblioteca_conceptos").delete().eq("institucion", cat_bib_sel).execute()
+                    get_biblioteca_instituciones.clear()
+                    get_biblioteca_conceptos.clear()
+                    st.session_state["cat_activa"] = "IMSS"
+                    st.rerun()
+
     with col_b2:
         with st.container(border=True):
-            st.markdown("**2. Crea una categoría:**")
+            st.markdown("**2. Crea una institución:**")
             c_nc1, c_nc2 = st.columns([3, 1])
-            c_nc1.text_input("Nombre de institución:", placeholder="Ej: ISSSTE, SEDENA...", label_visibility="collapsed", key="input_nueva_cat")
-            c_nc2.button("Crear", use_container_width=True, on_click=crear_categoria_callback)
+            nueva_inst = c_nc1.text_input("Nombre de institución:", label_visibility="collapsed", key=f"input_nueva_cat_{st.session_state.new_cat_key}", placeholder="Ej: ISSSTE, SEDENA...")
+            if c_nc2.button("Crear", use_container_width=True) and nueva_inst.strip():
+                inst_limpia = nueva_inst.strip()
+                if inst_limpia not in cats_bib:
+                    supabase.table("instituciones").insert({
+                        "nombre": inst_limpia,
+                        "user_id": user_id
+                    }).execute()
+                get_biblioteca_instituciones.clear()
+                st.session_state["cat_activa"] = inst_limpia
+                st.session_state["msg_exito_cat"] = True
+                st.session_state.new_cat_key += 1
+                st.rerun()
+            
+            if st.session_state.get("msg_exito_cat"):
+                st.success("✅ Institución creada exitosamente")
+                st.session_state["msg_exito_cat"] = False
 
     col_bib_alta, col_bib_del = st.columns(2)
     with col_bib_alta:
         with st.expander("📂 Subir Biblioteca desde Excel (Carga Masiva)"):
-            st.download_button("📥 Descargar Plantilla Excel de Biblioteca", data=generar_plantilla_excel("biblioteca"), file_name="Plantilla_Biblioteca_Global.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-            excel_bib = st.file_uploader("Sube la plantilla llena:", type=["xlsx"], key=f"up_bib_{st.session_state.up_bib_key}")
+            st.download_button("📥 Descargar Plantilla Excel de Biblioteca", data=generar_plantilla_excel("biblioteca"), file_name=f"Plantilla_Bib_Global_{ts_descarga}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            excel_bib = st.file_uploader("Sube plantilla llena:", type=["xlsx"], key=f"up_bib_{st.session_state.up_bib_key}")
             if excel_bib and st.button("Cargar a Biblioteca Global", type="primary"):
                 try:
                     df_b = pd.read_excel(excel_bib)
-                    if not all(col in df_b.columns for col in ["Especialidad", "Clave", "Descripcion", "Unidad", "Precio_Unitario"]):
-                        st.error("⚠️ El formato del Excel no coincide. Descarga la plantilla oficial.")
+                    if not all(col in df_b.columns for col in ["Especialidad (Opcional)", "Categoria (Opcional)", "Clave", "Descripcion", "Unidad", "Precio_Unitario"]):
+                        st.error("⚠️ El formato del Excel no coincide. Descarga la plantilla oficial V2.")
                     else:
                         df_b = df_b.fillna("")
                         df_b["Precio_Unitario"] = pd.to_numeric(df_b["Precio_Unitario"], errors="coerce").fillna(0.0)
                         records_b = []
                         for _, row in df_b.iterrows():
                             records_b.append({
-                                "categoria": cat_bib_sel, "especialidad": str(row["Especialidad"]).strip(),
-                                "clave": str(row["Clave"]).strip(), "descripcion": str(row["Descripcion"]).strip(),
-                                "unidad": normalizar_unidad(str(row["Unidad"])), "precio_referencial": float(row["Precio_Unitario"])
+                                "user_id": user_id, 
+                                "institucion": cat_bib_sel, 
+                                "especialidad": str(row["Especialidad (Opcional)"]).strip(), 
+                                "categoria": str(row["Categoria (Opcional)"]).strip(),
+                                "clave": str(row["Clave"]).strip(), 
+                                "descripcion": str(row["Descripcion"]).strip(),
+                                "unidad": normalizar_unidad(str(row["Unidad"])), 
+                                "precio_referencial": float(row["Precio_Unitario"])
                             })
                         for chunk in [records_b[i:i+50] for i in range(0, len(records_b), 50)]:
-                            supabase.table("biblioteca_conceptos").upsert(chunk, on_conflict="categoria,clave").execute()
+                            supabase.table("biblioteca_conceptos").insert(chunk).execute()
                         get_biblioteca_conceptos.clear()
-                        get_biblioteca_categorias.clear()
+                        get_biblioteca_instituciones.clear()
                         st.session_state.up_bib_key += 1
                         st.success(f"✅ {len(records_b)} conceptos guardados en {cat_bib_sel}.")
                         st.rerun()
-                except Exception as e: st.error(f"Error procesando: {e}")
+                except Exception as e: 
+                    st.error(f"Error procesando: {e}")
         
         with st.expander("➕ Alta manual (Concepto Maestro)"):
             with st.form("form_alta_bib", clear_on_submit=True):
-                esp_m = st.text_input("Especialidad", placeholder="Ej: 01 PRELIMINARES")
+                esp_m = st.text_input("Especialidad (Opcional)", placeholder="Ej: 01 PRELIMINARES")
+                cat_m = st.text_input("Categoría / Partida (Opcional)", placeholder="Ej: 1.1")
                 clave_m = st.text_input("Clave de Concepto *", placeholder="Ej: OC01-015-126")
                 unidad_m = st.selectbox("Unidad", unidades_list)
                 desc_m = st.text_area("Descripción detallada *", placeholder="Ingrese la descripción completa...")
                 pu_m = st.number_input("Precio Unitario ($)", min_value=0.0, value=0.0, step=10.0)
                 if st.form_submit_button("Guardar en Biblioteca"):
-                    if not clave_m.strip() or not desc_m.strip(): st.error("Clave y descripción son obligatorias.")
+                    if not clave_m.strip() or not desc_m.strip(): 
+                        st.error("Clave y descripción son obligatorias.")
                     else:
-                        supabase.table("biblioteca_conceptos").upsert({
-                            "categoria": cat_bib_sel, "especialidad": esp_m.strip(), "clave": clave_m.strip(),
-                            "descripcion": desc_m.strip(), "unidad": normalizar_unidad(unidad_m), "precio_referencial": pu_m
-                        }, on_conflict="categoria,clave").execute()
+                        supabase.table("biblioteca_conceptos").insert({
+                            "user_id": user_id, 
+                            "institucion": cat_bib_sel, 
+                            "especialidad": esp_m.strip(), 
+                            "categoria": cat_m.strip(),
+                            "clave": clave_m.strip(), 
+                            "descripcion": desc_m.strip(), 
+                            "unidad": normalizar_unidad(unidad_m), 
+                            "precio_referencial": pu_m
+                        }).execute()
                         get_biblioteca_conceptos.clear()
-                        get_biblioteca_categorias.clear()
+                        get_biblioteca_instituciones.clear()
                         st.success("✅ Guardado exitosamente.")
                         st.rerun()
 
-    lista_admin_bib = get_biblioteca_conceptos(cat_bib_sel)
+    lista_admin_bib = get_biblioteca_conceptos(cat_bib_sel, user_id)
     dict_del_bib = {f"#{idx} — {c['clave']} ({c['descripcion'][:50]}...)": c["id"] for idx, c in enumerate(lista_admin_bib, start=1)} if lista_admin_bib else {}
 
     with col_bib_del:
         with st.expander("🗑️ Eliminar Conceptos Maestros (Borrado Masivo)"):
             sel_del_bib_labels = st.multiselect("Seleccionar conceptos maestros:", list(dict_del_bib.keys()), key=f"del_bib_{st.session_state.bib_del_counter}")
             borrar_toda_cat = st.checkbox("⚠️ Selecciona para eliminar todos los conceptos mostrados en la tabla.", key=f"chk_toda_cat_{st.session_state.bib_del_counter}")
-            if borrar_toda_cat: sel_del_bib_labels = list(dict_del_bib.keys())
+            if borrar_toda_cat: 
+                sel_del_bib_labels = list(dict_del_bib.keys())
 
-            if st.button("Eliminar Seleccionados", type="primary", disabled=len(sel_del_bib_labels)==0, key="btn_del_bib_bulk"):
+            if st.button("Eliminar Seleccionados", type="primary", disabled=len(sel_del_bib_labels)==0, key=f"btn_del_bib_bulk_{st.session_state.bib_del_counter}"):
                 ids_to_delete = [dict_del_bib[label] for label in sel_del_bib_labels]
                 if ids_to_delete:
                     for chunk in [ids_to_delete[i:i+50] for i in range(0, len(ids_to_delete), 50)]:
@@ -1580,41 +936,52 @@ with tab_biblioteca:
                 st.rerun()
 
     if lista_admin_bib:
-        st.markdown(f"##### Conceptos en Categoría: {cat_bib_sel} (Editor Directo):")
+        st.markdown(f"##### Conceptos en Institución: {cat_bib_sel} (Editor Directo):")
         st.caption("💡 *Haz doble clic sobre cualquier celda para modificar la base maestra.*")
         df_admin = pd.DataFrame(lista_admin_bib)
         df_admin.insert(0, "#", range(1, len(df_admin) + 1))
-        df_admin["precio_referencial"] = pd.to_numeric(df_admin["precio_referencial"], errors="coerce").fillna(0.0).astype(float)
+        
+        df_admin["categoria"] = df_admin["categoria"].fillna("").astype(str)
+        df_admin["especialidad"] = df_admin["especialidad"].fillna("").astype(str)
         
         edited_bib = st.data_editor(
-            df_admin[["#", "clave", "especialidad", "unidad", "precio_referencial", "descripcion"]],
+            df_admin[["#", "clave", "especialidad", "categoria", "unidad", "precio_referencial", "descripcion"]],
             column_config={
-                "#": st.column_config.NumberColumn("#", disabled=True), "clave": st.column_config.TextColumn("Clave"),
-                "especialidad": st.column_config.TextColumn("Especialidad"), "unidad": st.column_config.SelectboxColumn("Unidad", options=unidades_list),
+                "#": st.column_config.NumberColumn("#", disabled=True), 
+                "clave": st.column_config.TextColumn("Clave"),
+                "especialidad": st.column_config.TextColumn("Especialidad"), 
+                "categoria": st.column_config.TextColumn("Categoría"),
+                "unidad": st.column_config.SelectboxColumn("Unidad", options=unidades_list),
                 "precio_referencial": st.column_config.NumberColumn("Precio Unitario ($)", format="$%.2f", min_value=0.0, step=10.0),
                 "descripcion": st.column_config.TextColumn("Descripción")
             },
-            use_container_width=True, hide_index=True, key="editor_biblioteca"
+            use_container_width=True, 
+            hide_index=True, 
+            key="editor_biblioteca"
         )
         
         if "editor_biblioteca" in st.session_state and st.session_state["editor_biblioteca"].get("edited_rows", {}):
             for row_str, col_vals in st.session_state["editor_biblioteca"]["edited_rows"].items():
                 id_bib_mod, up_b = lista_admin_bib[int(row_str)]["id"], {}
-                if "clave" in col_vals: up_b["clave"] = col_vals["clave"].strip()
-                if "especialidad" in col_vals: up_b["especialidad"] = col_vals["especialidad"].strip()
-                if "unidad" in col_vals: up_b["unidad"] = normalizar_unidad(col_vals["unidad"])
-                if "precio_referencial" in col_vals: up_b["precio_referencial"] = float(col_vals["precio_referencial"])
-                if "descripcion" in col_vals: up_b["descripcion"] = col_vals["descripcion"].strip()
+                for campo in ["clave", "especialidad", "categoria", "descripcion"]:
+                    if campo in col_vals: 
+                        up_b[campo] = str(col_vals[campo]).strip()
+                if "unidad" in col_vals: 
+                    up_b["unidad"] = normalizar_unidad(col_vals["unidad"])
+                if "precio_referencial" in col_vals: 
+                    up_b["precio_referencial"] = float(col_vals["precio_referencial"])
                 supabase.table("biblioteca_conceptos").update(up_b).eq("id", id_bib_mod).execute()
                 get_biblioteca_conceptos.clear()
                 st.toast("✅ Concepto maestro actualizado.")
                 st.rerun()
+    else:
+        st.info(f"ℹ️ La institución '{cat_bib_sel}' no tiene conceptos registrados aún. Utiliza las opciones de arriba para importar desde Excel o dar de alta conceptos manualmente.")
 
 # -------------------------------------------------------------
 # TAB 6: PROYECTOS (DATOS GENERALES)
 # -------------------------------------------------------------
 with tab_proyectos:
-    st.subheader("Gestión de Proyectos")
+    st.markdown("### Gestión de Proyectos 🏢")
     col_p_alta, col_p_baja = st.columns(2)
 
     with col_p_alta:
@@ -1636,7 +1003,7 @@ with tab_proyectos:
                     if not nombre_obra.strip(): st.error("El nombre de la obra es obligatorio.")
                     else:
                         supabase.table("proyectos").insert({
-                            "nombre_obra": nombre_obra.strip(), "descripcion_sintetica": descripcion_sintetica.strip(),
+                            "user_id": user_id, "nombre_obra": nombre_obra.strip(), "descripcion_sintetica": descripcion_sintetica.strip(),
                             "ubicacion": ubicacion.strip(), "unidad": unidad.strip(), "contrato_no": contrato_no.strip(),
                             "concurso_no": concurso_no.strip(), "contratista": contratista.strip(), "residente_obra": residente.strip()
                         }).execute()
@@ -1655,9 +1022,6 @@ with tab_proyectos:
                 if st.button("Eliminar Proyecto", type="primary", disabled=not st.checkbox("Confirmo la eliminación definitiva del proyecto", key=f"chk_del_proy_{st.session_state.del_proy_counter}")):
                     supabase.table("proyectos").delete().eq("id", proy_dict_delete[proy_del_sel]).execute()
                     get_proyectos.clear()
-                    get_conceptos.clear()
-                    get_estimaciones.clear()
-                    get_mediciones.clear()
                     st.session_state.del_proy_counter += 1
                     st.success("Proyecto eliminado correctamente.")
                     st.rerun()
