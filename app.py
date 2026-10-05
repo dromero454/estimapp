@@ -7,11 +7,16 @@ import datetime
 # =============================================================
 # IMPORTACIÓN DE MÓDULOS DE BACKEND
 # =============================================================
+import importlib
+import modulos.db_engine
+importlib.reload(modulos.db_engine)
+
 from modulos.auth_engine import render_login_card
 from modulos.db_engine import (
     normalizar_unidad, unidades_list, get_proyectos, get_biblioteca_instituciones,
     get_biblioteca_conceptos, get_conceptos, get_estimaciones, get_mediciones,
-    generar_plantilla_excel, extraer_nombre_archivo, optimizar_imagen
+    generar_plantilla_excel, extraer_nombre_archivo, optimizar_imagen,
+    procesar_excel_importacion
 )
 from modulos.pdf_engine import generar_pdf_resumen_ejecutivo
 from modulos.excel_engine import inyectar_datos_excel_imss, inyectar_datos_excel_pjf, generar_excel_estimapp, descargar_plantilla_supabase
@@ -108,9 +113,14 @@ button[data-baseweb="tab"], button[data-baseweb="tab"] p, button[data-baseweb="t
 """, unsafe_allow_html=True)
 
 # Variables de estado globales
-keys = ["del_proy_counter", "del_conc_counter", "del_est_counter", "del_med_counter", "cap_counter", "dim_counter", "bib_del_counter", "up_bib_key", "up_proy_key", "ms_lote_key", "new_cat_key", "cat_activa"]
+keys = ["del_proy_counter", "del_conc_counter", "del_est_counter", "ed_est_counter", "ed_cat_counter", "ed_med_counter", "ed_bib_counter", "ed_proy_counter", "del_med_counter", "cap_counter", "dim_counter", "bib_del_counter", "up_bib_key", "up_proy_key", "ms_lote_key", "new_cat_key", "cat_activa"]
 for k in keys:
     if k not in st.session_state: st.session_state[k] = 0 if "counter" in k or "key" in k else "IMSS"
+
+# Limpieza preventiva de claves obsoletas en sesión para evitar bucles de error persistentes
+for legacy_k in ["editor_estimaciones", "editor_catalogo", "editor_mediciones", "editor_proyectos"]:
+    if legacy_k in st.session_state:
+        st.session_state.pop(legacy_k, None)
 
 # =============================================================
 # FLUJO DE AUTENTICACIÓN
@@ -274,20 +284,46 @@ with tab_dashboard:
                         monto_est=monto_estimado_global, saldo_ejercer=saldo_por_ejercer,
                         pct_global=pct_global, df_conceptos=df_dash
                     )
+                    fecha_gen = datetime.date.today().strftime("%d/%m/%Y")
+                    contrato_nom = proy_obj_actual.get('contrato_no') or 'Obra'
                     st.download_button(
                         label="📄 Exportar Resumen Ejecutivo (PDF)", data=pdf_bytes,
-                        file_name=f"Resumen_Ejecutivo_{proy_obj_actual.get('contrato_no', 'Obra')}.pdf",
+                        file_name=f"Resumen_Ejecutivo_{contrato_nom}_{fecha_gen}.pdf",
                         mime="application/pdf", use_container_width=True
                     )
+
+                # --- Dimensionamiento de Columnas ---
+                # Estatus: Utiliza autosize nativo de Glide Data Grid (width=None), ajustándose exactamente al texto sin espacio en blanco sobrante.
+                # Prioridad 2: % Avance (Intocable, ancho garantizado para barra gráfica y etiqueta %.1f%%)
+                w_avance_dyn = 125
+
+                # Prioridad 3: Clave (Elástica, cede ante Prioridades 1 y 2 si compiten por espacio, tope 220px)
+                max_len_c = df_dash["Clave"].astype(str).map(len).max() if not df_dash.empty else 5
+                w_clave_dyn = max(130, min(int(max_len_c * 8.5) + 25, 220))
+
+                # Prioridad 4: Fechas de corte (Elástica, menor jerarquía, cede primero ante las demás, rango 170-205px)
+                max_len_p = df_dash["Periodo"].astype(str).map(len).max() if not df_dash.empty else 15
+                w_periodo_dyn = max(170, min(int(max_len_p * 7.8) + 20, 205))
 
                 st.dataframe(
                     df_dash,
                     column_config={
-                        "Estimación": st.column_config.TextColumn("Estimación"), "Periodo": st.column_config.TextColumn("Fechas de Corte"), "Estado": st.column_config.TextColumn("Estado"),
-                        "#": st.column_config.NumberColumn("#", width="small"), "Clave": st.column_config.TextColumn("Clave"), "Unidad": st.column_config.TextColumn("Unidad", width="small"),
-                        "P.U. ($)": st.column_config.NumberColumn("P.U. ($)", format="$%.2f"), "Importe Periodo ($)": st.column_config.NumberColumn("Importe Periodo ($)", format="$%.2f"),
-                        "Importe Acumulado ($)": st.column_config.NumberColumn("Importe Acumulado ($)", format="$%.2f"), "Saldo Financiero ($)": st.column_config.NumberColumn("Saldo Financiero ($)", format="$%.2f"),
-                        "% Avance": st.column_config.ProgressColumn("% Avance", min_value=0, max_value=100, format="%.1f%%"),
+                        "Estimación": st.column_config.TextColumn("Estimación", width=115),
+                        "Periodo": st.column_config.TextColumn("Fechas de Corte", width=w_periodo_dyn),
+                        "Estado": st.column_config.TextColumn("Estado", width=95),
+                        "#": st.column_config.NumberColumn("#", width=50),
+                        "Clave": st.column_config.TextColumn("Clave", width=w_clave_dyn),
+                        "Unidad": st.column_config.TextColumn("Unidad", width=65),
+                        "Cant. Contratada": st.column_config.NumberColumn("Cant. Contratada", width=105),
+                        "Cant. en Periodo": st.column_config.NumberColumn("Cant. en Periodo", width=105),
+                        "Cant. Acumulada": st.column_config.NumberColumn("Cant. Acumulada", width=105),
+                        "Saldo Físico": st.column_config.NumberColumn("Saldo Físico", width=95),
+                        "P.U. ($)": st.column_config.NumberColumn("P.U. ($)", format="$%.2f", width=90),
+                        "Importe Periodo ($)": st.column_config.NumberColumn("Importe Periodo ($)", format="$%.2f", width=125),
+                        "Importe Acumulado ($)": st.column_config.NumberColumn("Importe Acumulado ($)", format="$%.2f", width=125),
+                        "Saldo Financiero ($)": st.column_config.NumberColumn("Saldo Financiero ($)", format="$%.2f", width=125),
+                        "% Avance": st.column_config.ProgressColumn("% Avance", min_value=0, max_value=100, format="%.1f%%", width=w_avance_dyn),
+                        "Estatus": st.column_config.TextColumn("Estatus"),
                     },
                     use_container_width=True, hide_index=True
                 )
@@ -442,6 +478,7 @@ with tab_captura:
                     meds_borrar_dict[f"#{idx} — {clave_c} ({m['localizacion']} — {cant_m} {u_c})"] = m
 
                 df_meds = pd.DataFrame(rows)
+                ed_med_key = f"editor_mediciones_{id_est}_{st.session_state.get('ed_med_counter', 0)}"
                 edited_meds = st.data_editor(
                     df_meds.drop(columns=["id"]),
                     column_config={
@@ -450,27 +487,55 @@ with tab_captura:
                         "P.U. ($)": st.column_config.NumberColumn("P.U. ($)", format="$%.2f", disabled=True), "Importe ($)": st.column_config.NumberColumn("Importe ($)", format="$%.2f", disabled=True),
                         "Tiene Foto": st.column_config.TextColumn("Foto", disabled=True), "Tiene Croquis": st.column_config.TextColumn("Croquis", disabled=True),
                     },
-                    use_container_width=True, hide_index=True, key="editor_mediciones"
+                    use_container_width=True, hide_index=True, key=ed_med_key
                 )
 
-                if "editor_mediciones" in st.session_state and st.session_state["editor_mediciones"].get("edited_rows", {}):
-                    for row_str, col_vals in st.session_state["editor_mediciones"]["edited_rows"].items():
-                        r_idx, up_payload = int(row_str), {}
+                if ed_med_key in st.session_state and st.session_state[ed_med_key].get("edited_rows", {}):
+                    error_med_msg = None
+                    cambios_med_guardados = 0
+
+                    for row_str, col_vals in list(st.session_state[ed_med_key]["edited_rows"].items()):
+                        try:
+                            r_idx = int(row_str)
+                        except ValueError:
+                            continue
+                        if r_idx >= len(rows):
+                            continue
+
+                        up_payload = {}
                         id_med_up = rows[r_idx]["id"]
+
                         for k in ["Localización", "Eje", "Tramo"]:
-                            if k in col_vals: up_payload[k.lower()] = col_vals[k].strip()
+                            if k in col_vals:
+                                up_payload[k.lower()] = str(col_vals[k] or "").strip()
+
                         for k in ["Largo / Factor", "Ancho / Kilos", "Alto", "Pzas"]:
                             if k in col_vals: 
-                                if k == "Largo / Factor": up_payload["largo"] = float(col_vals[k])
-                                elif k == "Ancho / Kilos": up_payload["ancho"] = float(col_vals[k])
-                                elif k == "Pzas": up_payload["piezas"] = float(col_vals[k])
-                                else: up_payload["alto"] = float(col_vals[k])
+                                val_k = col_vals[k]
+                                try:
+                                    val_fl = float(val_k) if val_k is not None and str(val_k).strip() not in ("", "None", "nan") else float(rows[r_idx][k])
+                                except (ValueError, TypeError):
+                                    val_fl = float(rows[r_idx][k])
+
+                                if k == "Largo / Factor": up_payload["largo"] = val_fl
+                                elif k == "Ancho / Kilos": up_payload["ancho"] = val_fl
+                                elif k == "Pzas": up_payload["piezas"] = val_fl
+                                else: up_payload["alto"] = val_fl
 
                         if any(k in col_vals for k in ["Largo / Factor", "Ancho / Kilos", "Alto", "Pzas"]):
-                            l_val = float(col_vals.get("Largo / Factor", rows[r_idx]["Largo / Factor"]))
-                            an_val = float(col_vals.get("Ancho / Kilos", rows[r_idx]["Ancho / Kilos"]))
-                            al_val = float(col_vals.get("Alto", rows[r_idx]["Alto"]))
-                            pz_val = float(col_vals.get("Pzas", rows[r_idx]["Pzas"]))
+                            def _safe_float(k_name):
+                                v = col_vals.get(k_name)
+                                if v is None or str(v).strip() in ("", "None", "nan"):
+                                    return float(rows[r_idx][k_name])
+                                try:
+                                    return float(v)
+                                except (ValueError, TypeError):
+                                    return float(rows[r_idx][k_name])
+
+                            l_val = _safe_float("Largo / Factor")
+                            an_val = _safe_float("Ancho / Kilos")
+                            al_val = _safe_float("Alto")
+                            pz_val = _safe_float("Pzas")
                             u_item = rows[r_idx]["Unidad"]
                             
                             if u_item == "m³": c_calc = l_val * an_val * al_val * pz_val
@@ -481,9 +546,24 @@ with tab_captura:
                             else: c_calc = pz_val
                             up_payload["cantidad_total"] = round(c_calc, 3)
 
-                        supabase.table("mediciones_campo").update(up_payload).eq("id", id_med_up).execute()
+                        if up_payload:
+                            try:
+                                supabase.table("mediciones_campo").update(up_payload).eq("id", id_med_up).execute()
+                                cambios_med_guardados += 1
+                            except Exception as e:
+                                error_med_msg = f"⚠️ Error al actualizar medición: {e}"
+                                break
+
+                    if error_med_msg:
+                        st.toast(error_med_msg, icon="⚠️")
+                        st.session_state["ed_med_counter"] = st.session_state.get("ed_med_counter", 0) + 1
+                        st.session_state.pop(ed_med_key, None)
+                        st.rerun()
+                    elif cambios_med_guardados > 0:
                         get_mediciones.clear()
                         st.toast("✅ Medición actualizada.")
+                        st.session_state["ed_med_counter"] = st.session_state.get("ed_med_counter", 0) + 1
+                        st.session_state.pop(ed_med_key, None)
                         st.rerun()
 
                 st.metric("Total Estimado en el Periodo (Sin I.V.A.)", f"${total_periodo_acum:,.2f} MXN")
@@ -527,26 +607,38 @@ with tab_estimaciones:
         proy_sel_est = st.selectbox("Seleccionar Proyecto", list(proyectos_dict.keys()), key="est_proy")
         id_proy_est = proyectos_dict[proy_sel_est]
 
+        estimaciones_proyecto = get_estimaciones(id_proy_est)
+        periodos_existentes = {int(e["num_periodo"]) for e in estimaciones_proyecto if e.get("num_periodo") is not None} if estimaciones_proyecto else set()
+        siguiente_num_periodo = (max(periodos_existentes) + 1) if periodos_existentes else 1
+
         col_est_nueva, col_est_baja = st.columns(2)
         with col_est_nueva:
             with st.expander("➕ Aperturar nueva estimación"):
                 with st.form("form_nueva_estimacion", clear_on_submit=True):
                     col_e1, col_e2, col_e3 = st.columns(3)
-                    num_periodo = col_e1.number_input("N° Estimación", min_value=1, step=1, value=1)
+                    num_periodo = col_e1.number_input(
+                        "N° Estimación", min_value=1, step=1, value=siguiente_num_periodo,
+                        key=f"num_est_input_{id_proy_est}_{st.session_state.get('ed_est_counter', 0)}"
+                    )
                     f_ini = col_e2.date_input("Fecha Inicio")
                     f_fin = col_e3.date_input("Fecha Fin")
                     if st.form_submit_button("Abrir Periodo"):
-                        try:
-                            supabase.table("estimaciones").insert({
-                                "id_proyecto": id_proy_est, "num_periodo": int(num_periodo),
-                                "periodo_inicio": str(f_ini), "periodo_fin": str(f_fin), "estado": "borrador"
-                            }).execute()
-                            get_estimaciones.clear()
-                            st.success(f"Estimación #{num_periodo} aperturada.")
-                            st.rerun()
-                        except Exception as e: st.error(f"Error al aperturar: {e}")
+                        if int(num_periodo) in periodos_existentes:
+                            st.error(f"⚠️ La estimación #{int(num_periodo)} ya existe en este proyecto.")
+                        elif f_fin < f_ini:
+                            st.error("⚠️ La fecha de fin no puede ser anterior a la fecha de inicio.")
+                        else:
+                            try:
+                                supabase.table("estimaciones").insert({
+                                    "id_proyecto": id_proy_est, "num_periodo": int(num_periodo),
+                                    "periodo_inicio": str(f_ini), "periodo_fin": str(f_fin), "estado": "borrador"
+                                }).execute()
+                                get_estimaciones.clear()
+                                st.session_state["ed_est_counter"] = st.session_state.get("ed_est_counter", 0) + 1
+                                st.success(f"Estimación #{num_periodo} aperturada.")
+                                st.rerun()
+                            except Exception as e: st.error(f"Error al aperturar: {e}")
 
-        estimaciones_proyecto = get_estimaciones(id_proy_est)
         dict_est_borrar = {f"#{idx} — Estimación #{e['num_periodo']} ({e['periodo_inicio']} al {e['periodo_fin']})": e["id"] for idx, e in enumerate(estimaciones_proyecto, start=1)} if estimaciones_proyecto else {}
 
         with col_est_baja:
@@ -560,34 +652,99 @@ with tab_estimaciones:
                         get_estimaciones.clear()
                         get_mediciones.clear()
                         st.session_state.del_est_counter += 1
+                        st.session_state["ed_est_counter"] = st.session_state.get("ed_est_counter", 0) + 1
                         st.success("Estimación eliminada.")
                         st.rerun()
 
         if estimaciones_proyecto:
             st.markdown("##### Listado de Estimaciones:")
             st.caption("💡 *Haz doble clic en cualquier celda para cambiar de estado o corregir las fechas de corte.*")
+
+            if "est_error_banner" in st.session_state and st.session_state["est_error_banner"]:
+                st.error(st.session_state.pop("est_error_banner"))
+
             df_e = pd.DataFrame(estimaciones_proyecto)
             df_e.insert(0, "#", range(1, len(df_e) + 1))
             df_editor_data = df_e[["#", "num_periodo", "periodo_inicio", "periodo_fin", "estado"]].copy()
+            df_editor_data["periodo_inicio"] = pd.to_datetime(df_editor_data["periodo_inicio"], errors="coerce").dt.date
+            df_editor_data["periodo_fin"] = pd.to_datetime(df_editor_data["periodo_fin"], errors="coerce").dt.date
+
+            ed_est_key = f"editor_estimaciones_{id_proy_est}_{st.session_state.get('ed_est_counter', 0)}"
 
             edited_table = st.data_editor(
                 df_editor_data,
                 column_config={
+                    "#": st.column_config.NumberColumn("#", disabled=True),
+                    "num_periodo": st.column_config.NumberColumn("N° Periodo", disabled=True),
+                    "periodo_inicio": st.column_config.DateColumn("Fecha Inicio", format="YYYY-MM-DD", required=True),
+                    "periodo_fin": st.column_config.DateColumn("Fecha Fin", format="YYYY-MM-DD", required=True),
                     "estado": st.column_config.SelectboxColumn("Estado de la Estimación", width="medium", options=["borrador", "en_revision", "aprobada"], required=True),
-                    "#": st.column_config.NumberColumn("#", disabled=True), "num_periodo": st.column_config.NumberColumn("N° Periodo", disabled=True),
                 },
-                hide_index=True, use_container_width=True, key="editor_estimaciones"
+                hide_index=True, use_container_width=True, key=ed_est_key
             )
 
-            if "editor_estimaciones" in st.session_state and st.session_state["editor_estimaciones"].get("edited_rows", {}):
-                for row_idx_str, col_mod in st.session_state["editor_estimaciones"]["edited_rows"].items():
-                    id_est_mod, up_est = estimaciones_proyecto[int(row_idx_str)]["id"], {}
-                    if "estado" in col_mod: up_est["estado"] = col_mod["estado"]
-                    if "periodo_inicio" in col_mod: up_est["periodo_inicio"] = str(col_mod["periodo_inicio"])
-                    if "periodo_fin" in col_mod: up_est["periodo_fin"] = str(col_mod["periodo_fin"])
-                    supabase.table("estimaciones").update(up_est).eq("id", id_est_mod).execute()
+            if ed_est_key in st.session_state and st.session_state[ed_est_key].get("edited_rows", {}):
+                error_msg = None
+                cambios_guardados = 0
+
+                for row_idx_str, col_mod in list(st.session_state[ed_est_key]["edited_rows"].items()):
+                    try:
+                        r_idx = int(row_idx_str)
+                    except ValueError:
+                        continue
+                    if r_idx >= len(estimaciones_proyecto):
+                        continue
+
+                    est_actual = estimaciones_proyecto[r_idx]
+                    id_est_mod = est_actual["id"]
+                    up_est = {}
+
+                    if "estado" in col_mod:
+                        val_est = str(col_mod["estado"]).strip() if col_mod["estado"] else ""
+                        if val_est in ["borrador", "en_revision", "aprobada"]:
+                            up_est["estado"] = val_est
+                        else:
+                            error_msg = "⚠️ El estado seleccionado no es válido."
+
+                    for col_f in ["periodo_inicio", "periodo_fin"]:
+                        if col_f in col_mod:
+                            val_raw = col_mod[col_f]
+                            if val_raw is None or pd.isna(val_raw) or str(val_raw).strip() in ("", "None", "nan", "NaT"):
+                                error_msg = "⚠️ La fecha de inicio y la fecha de fin son obligatorias y no pueden quedar vacías."
+                            else:
+                                try:
+                                    d_parsed = pd.to_datetime(str(val_raw).strip()).date()
+                                    up_est[col_f] = d_parsed.strftime("%Y-%m-%d")
+                                except Exception:
+                                    error_msg = "⚠️ El formato de fecha no es válido (use AAAA-MM-DD)."
+
+                    if not error_msg:
+                        f_ini_check = up_est.get("periodo_inicio", est_actual.get("periodo_inicio"))
+                        f_fin_check = up_est.get("periodo_fin", est_actual.get("periodo_fin"))
+                        if f_ini_check and f_fin_check and str(f_fin_check) < str(f_ini_check):
+                            error_msg = "⚠️ La fecha de fin no puede ser anterior a la fecha de inicio."
+
+                    if error_msg:
+                        break
+
+                    if up_est:
+                        try:
+                            supabase.table("estimaciones").update(up_est).eq("id", id_est_mod).execute()
+                            cambios_guardados += 1
+                        except Exception as e:
+                            error_msg = f"⚠️ Error al actualizar la estimación: {e}"
+                            break
+
+                if error_msg:
+                    st.session_state["est_error_banner"] = error_msg
+                    st.session_state["ed_est_counter"] = st.session_state.get("ed_est_counter", 0) + 1
+                    st.session_state.pop(ed_est_key, None)
+                    st.rerun()
+                elif cambios_guardados > 0:
                     get_estimaciones.clear()
                     st.toast("✅ Estimación actualizada.")
+                    st.session_state["ed_est_counter"] = st.session_state.get("ed_est_counter", 0) + 1
+                    st.session_state.pop(ed_est_key, None)
                     st.rerun()
 
             st.markdown("---")
@@ -595,12 +752,12 @@ with tab_estimaciones:
             col_exp_1, col_exp_2, col_exp_3 = st.columns([2, 1, 1])
             
             est_a_descargar = col_exp_1.selectbox("Estimación a Exportar:", [f"Estimación #{e['num_periodo']} (Del {e['periodo_inicio']} al {e['periodo_fin']})" for e in estimaciones_proyecto])
-            formato_institucion = col_exp_2.selectbox("Formato de Salida:", ["IMSS", "Poder Judicial de la Federación", "Formato Estimapp (Libre)"])
+            formato_institucion = col_exp_2.selectbox("Formato de Salida:", ["IMSS", "Poder Judicial de la Federación", "Formato Estimapp"])
             proy_obj_actual = next((p for p in lista_proyectos if p["id"] == id_proy_est), {})
             
             with col_exp_3:
                 st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
-                btn_generar_excel = st.button("Preparar Archivo .XLSX", type="primary", use_container_width=True)
+                btn_generar_excel = st.button("Preparar estimación en formato Excel", type="primary", use_container_width=True)
 
             if btn_generar_excel:
                 idx_est_sel = [f"Estimación #{e['num_periodo']} (Del {e['periodo_inicio']} al {e['periodo_fin']})" for e in estimaciones_proyecto].index(est_a_descargar)
@@ -622,12 +779,30 @@ with tab_estimaciones:
                             st.session_state["xls_name"] = f"Estimacion_{est_obj_actual['num_periodo']}_Estimapp.xlsx"
 
                         st.session_state["xls_buffer"] = xlsx_generado
-                        st.success("✅ Archivo listo para descarga.")
                     except Exception as e:
                         st.error(f"Error: {e}")
 
+            def _on_descarga_excel_completada():
+                st.session_state.pop("xls_buffer", None)
+                st.session_state.pop("xls_name", None)
+
             if st.session_state.get("xls_buffer"):
-                st.download_button("⬇️ Descargar Archivo", data=st.session_state["xls_buffer"], file_name=st.session_state["xls_name"], mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+                st.success("✅ Archivo listo para descarga.")
+                btn_descarga = st.download_button(
+                    "⬇️ Descargar Archivo",
+                    data=st.session_state["xls_buffer"],
+                    file_name=st.session_state.get("xls_name", "Estimacion.xlsx"),
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                    on_click=_on_descarga_excel_completada,
+                    key="btn_descarga_excel_estimacion"
+                )
+                if btn_descarga:
+                    _on_descarga_excel_completada()
+                    st.rerun()
+            else:
+                # Espacio visual reservado para evitar que el borde de la página quede pegado y permitir ver de antemano el área de descarga
+                st.markdown("<div style='height: 120px; margin-top: 14px;'></div>", unsafe_allow_html=True)
 
 # -------------------------------------------------------------
 # TAB 4: CATÁLOGO DEL PROYECTO
@@ -640,7 +815,7 @@ with tab_catalogo:
         proy_id = proyectos_dict[proy_sel]
 
         categorias_disp = get_biblioteca_instituciones(user_id)
-        cat_sel = st.selectbox("Institución maestra (Para importar):", categorias_disp, key="sel_cat_bib_2")
+        cat_sel = st.selectbox("Institución/catálogo maestro (Para importar):", categorias_disp, key="sel_cat_bib_2")
         conceptos_bib = get_biblioteca_conceptos(cat_sel, user_id)
 
         col_import1, col_import2 = st.columns(2)
@@ -697,27 +872,22 @@ with tab_catalogo:
                 if excel_proy and st.button("Subir e Insertar al Proyecto", type="primary"):
                     try:
                         df_up = pd.read_excel(excel_proy)
-                        expected = ["Especialidad (Opcional)", "Categoria (Opcional)", "Clave", "Descripcion", "Unidad", "Cantidad_Contratada", "Precio_Unitario"]
-                        if not all(col in df_up.columns for col in expected): st.error("⚠️ Formato incorrecto. Extrae la plantilla base primero.")
+                        ok, error_msg, records = procesar_excel_importacion(df_up, tipo="proyecto")
+                        if not ok:
+                            st.error(f"⚠️ {error_msg}")
+                        elif not records:
+                            st.warning("⚠️ No se encontraron filas con datos válidos (clave y descripción requeridas).")
                         else:
-                            df_up = df_up.fillna("")
-                            df_up["Cantidad_Contratada"] = pd.to_numeric(df_up["Cantidad_Contratada"], errors="coerce").fillna(0.0)
-                            df_up["Precio_Unitario"] = pd.to_numeric(df_up["Precio_Unitario"], errors="coerce").fillna(0.0)
-                            records = []
-                            for _, row in df_up.iterrows():
-                                records.append({
-                                    "id_proyecto": proy_id, "especialidad": str(row["Especialidad (Opcional)"]).strip(),
-                                    "categoria": str(row["Categoria (Opcional)"]).strip(), "clave": str(row["Clave"]).strip(), 
-                                    "descripcion": str(row["Descripcion"]).strip(), "unidad": normalizar_unidad(str(row["Unidad"])), 
-                                    "cantidad_contratada": float(row["Cantidad_Contratada"]), "precio_unitario": float(row["Precio_Unitario"])
-                                })
+                            for r in records:
+                                r["id_proyecto"] = proy_id
                             for chunk in [records[i:i+50] for i in range(0, len(records), 50)]:
                                 supabase.table("catalogo_conceptos").insert(chunk).execute()
                             get_conceptos.clear()
                             st.session_state.up_proy_key += 1
-                            st.success(f"✅ {len(records)} conceptos cargados.")
+                            st.success(f"✅ {len(records)} conceptos cargados exitosamente.")
                             st.rerun()
-                    except Exception as e: st.error(f"Error procesando: {e}")
+                    except Exception as e:
+                        st.error(f"Error procesando el archivo: {e}")
 
             with st.expander("➕ Alta manual (Concepto Extraordinario)"):
                 with st.form("form_concepto_manual", clear_on_submit=True):
@@ -769,39 +939,111 @@ with tab_catalogo:
             df_c = pd.DataFrame(conceptos_proyecto)
             df_c.insert(0, "#", range(1, len(df_c) + 1))
             
-            # Limpieza de valores vacíos
+            # Limpieza y formateo seguro de valores
+            df_c["clave"] = df_c["clave"].fillna("").astype(str)
             df_c["categoria"] = df_c["categoria"].fillna("").astype(str)
             df_c["especialidad"] = df_c["especialidad"].fillna("").astype(str)
+            df_c["descripcion"] = df_c["descripcion"].fillna("").astype(str)
+            df_c["cantidad_contratada"] = pd.to_numeric(df_c["cantidad_contratada"], errors="coerce").fillna(0.0).astype(float)
+            df_c["precio_unitario"] = pd.to_numeric(df_c["precio_unitario"], errors="coerce").fillna(0.0).astype(float)
             
+            ed_cat_key = f"editor_catalogo_{proy_id}_{st.session_state.get('ed_cat_counter', 0)}"
+
             edited_catalogo = st.data_editor(
                 df_c[["#", "clave", "especialidad", "categoria", "unidad", "cantidad_contratada", "precio_unitario", "descripcion"]],
                 column_config={
                     "#": st.column_config.NumberColumn("#", disabled=True),
-                    "clave": st.column_config.TextColumn("Clave"),
+                    "clave": st.column_config.TextColumn("Clave", required=True),
                     "especialidad": st.column_config.TextColumn("Especialidad"),
                     "categoria": st.column_config.TextColumn("Categoría"),
-                    "unidad": st.column_config.SelectboxColumn("Unidad", options=unidades_list),
-                    "cantidad_contratada": st.column_config.NumberColumn("Cant. Contratada", min_value=0.0, step=1.0),
-                    "precio_unitario": st.column_config.NumberColumn("P.U. ($)", format="$%.2f", min_value=0.0, step=10.0),
+                    "unidad": st.column_config.SelectboxColumn("Unidad", options=unidades_list, required=True),
+                    "cantidad_contratada": st.column_config.NumberColumn("Cant. Contratada", min_value=0.0, step=1.0, required=True),
+                    "precio_unitario": st.column_config.NumberColumn("P.U. ($)", format="$%.2f", min_value=0.0, step=10.0, required=True),
                     "descripcion": st.column_config.TextColumn("Descripción")
                 },
                 use_container_width=True,
                 hide_index=True,
-                key="editor_catalogo"
+                key=ed_cat_key
             )
 
-            if "editor_catalogo" in st.session_state and st.session_state["editor_catalogo"].get("edited_rows", {}):
-                for row_str, col_vals in st.session_state["editor_catalogo"]["edited_rows"].items():
-                    id_conc_mod = conceptos_proyecto[int(row_str)]["id"]
+            if ed_cat_key in st.session_state and st.session_state[ed_cat_key].get("edited_rows", {}):
+                error_cat_msg = None
+                cambios_cat_guardados = 0
+
+                for row_str, col_vals in list(st.session_state[ed_cat_key]["edited_rows"].items()):
+                    try:
+                        r_idx = int(row_str)
+                    except ValueError:
+                        continue
+                    if r_idx >= len(conceptos_proyecto):
+                        continue
+
+                    conc_actual = conceptos_proyecto[r_idx]
+                    id_conc_mod = conc_actual["id"]
                     up_payload = {}
-                    for campo in ["clave", "especialidad", "categoria", "descripcion"]:
-                        if campo in col_vals: up_payload[campo] = str(col_vals[campo]).strip()
-                    if "unidad" in col_vals: up_payload["unidad"] = normalizar_unidad(col_vals["unidad"])
-                    if "cantidad_contratada" in col_vals: up_payload["cantidad_contratada"] = float(col_vals["cantidad_contratada"])
-                    if "precio_unitario" in col_vals: up_payload["precio_unitario"] = float(col_vals["precio_unitario"])
-                    supabase.table("catalogo_conceptos").update(up_payload).eq("id", id_conc_mod).execute()
+
+                    # 1. Clave obligatoria: no permitir vacíos ni None
+                    if "clave" in col_vals:
+                        val_clave = col_vals["clave"]
+                        if val_clave is None or not str(val_clave).strip():
+                            error_cat_msg = "⚠️ La clave del concepto es obligatoria y no puede quedar vacía."
+                            break
+                        up_payload["clave"] = str(val_clave).strip()
+
+                    # 2. Textos opcionales
+                    for campo in ["especialidad", "categoria", "descripcion"]:
+                        if campo in col_vals:
+                            up_payload[campo] = str(col_vals[campo] or "").strip()
+
+                    # 3. Unidad obligatoria
+                    if "unidad" in col_vals:
+                        val_u = col_vals["unidad"]
+                        if val_u:
+                            up_payload["unidad"] = normalizar_unidad(val_u)
+                        else:
+                            error_cat_msg = "⚠️ La unidad del concepto es obligatoria."
+                            break
+
+                    # 4. Cantidad contratada: protección contra None/empty
+                    if "cantidad_contratada" in col_vals:
+                        val_c = col_vals["cantidad_contratada"]
+                        if val_c is None or str(val_c).strip() in ("", "None", "nan"):
+                            up_payload["cantidad_contratada"] = float(conc_actual.get("cantidad_contratada") or 0.0)
+                        else:
+                            try:
+                                up_payload["cantidad_contratada"] = max(0.0, float(val_c))
+                            except (ValueError, TypeError):
+                                up_payload["cantidad_contratada"] = float(conc_actual.get("cantidad_contratada") or 0.0)
+
+                    # 5. Precio unitario: protección contra None/empty
+                    if "precio_unitario" in col_vals:
+                        val_p = col_vals["precio_unitario"]
+                        if val_p is None or str(val_p).strip() in ("", "None", "nan"):
+                            up_payload["precio_unitario"] = float(conc_actual.get("precio_unitario") or 0.0)
+                        else:
+                            try:
+                                up_payload["precio_unitario"] = max(0.0, float(val_p))
+                            except (ValueError, TypeError):
+                                up_payload["precio_unitario"] = float(conc_actual.get("precio_unitario") or 0.0)
+
+                    if up_payload:
+                        try:
+                            supabase.table("catalogo_conceptos").update(up_payload).eq("id", id_conc_mod).execute()
+                            cambios_cat_guardados += 1
+                        except Exception as e:
+                            error_cat_msg = f"⚠️ Error al actualizar el concepto: {e}"
+                            break
+
+                if error_cat_msg:
+                    st.toast(error_cat_msg, icon="⚠️")
+                    st.session_state["ed_cat_counter"] = st.session_state.get("ed_cat_counter", 0) + 1
+                    st.session_state.pop(ed_cat_key, None)
+                    st.rerun()
+                elif cambios_cat_guardados > 0:
                     get_conceptos.clear()
-                    st.toast("✅ Concepto actualizado.")
+                    st.toast("✅ Catálogo actualizado.")
+                    st.session_state["ed_cat_counter"] = st.session_state.get("ed_cat_counter", 0) + 1
+                    st.session_state.pop(ed_cat_key, None)
                     st.rerun()
 
 # -------------------------------------------------------------
@@ -812,15 +1054,17 @@ with tab_biblioteca:
     st.caption("Administra el tabulador institucional de precios y claves para usar en múltiples contratos.")
     
     cats_bib = get_biblioteca_instituciones(user_id)
-    idx_cat_activa = cats_bib.index(st.session_state.cat_activa) if st.session_state.cat_activa in cats_bib else 0
+    if "pending_cat_activa" in st.session_state:
+        st.session_state["cat_activa"] = st.session_state.pop("pending_cat_activa")
+    elif "cat_activa" not in st.session_state or st.session_state["cat_activa"] not in cats_bib:
+        st.session_state["cat_activa"] = cats_bib[0] if cats_bib else "IMSS"
     
     col_b1, col_b2 = st.columns(2)
     with col_b1:
         with st.container(border=True):
-            st.markdown("**1. Selecciona o elimina una institución:**")
+            st.markdown("**1. Selecciona o elimina una institución/catálogo maestro:**")
             c_bc1, c_bc2 = st.columns([3, 1])
-            cat_bib_sel = c_bc1.selectbox("Institución:", cats_bib, index=idx_cat_activa, label_visibility="collapsed")
-            st.session_state["cat_activa"] = cat_bib_sel
+            cat_bib_sel = c_bc1.selectbox("Institución:", cats_bib, key="cat_activa", label_visibility="collapsed")
 
             if c_bc2.button("Eliminar", type="primary", use_container_width=True):
                 if cat_bib_sel:
@@ -828,26 +1072,29 @@ with tab_biblioteca:
                     supabase.table("biblioteca_conceptos").delete().eq("institucion", cat_bib_sel).execute()
                     get_biblioteca_instituciones.clear()
                     get_biblioteca_conceptos.clear()
-                    st.session_state["cat_activa"] = "IMSS"
+                    st.session_state["pending_cat_activa"] = "IMSS"
                     st.rerun()
 
     with col_b2:
         with st.container(border=True):
-            st.markdown("**2. Crea una institución:**")
-            c_nc1, c_nc2 = st.columns([3, 1])
-            nueva_inst = c_nc1.text_input("Nombre de institución:", label_visibility="collapsed", key=f"input_nueva_cat_{st.session_state.new_cat_key}", placeholder="Ej: ISSSTE, SEDENA...")
-            if c_nc2.button("Crear", use_container_width=True) and nueva_inst.strip():
-                inst_limpia = nueva_inst.strip()
-                if inst_limpia not in cats_bib:
-                    supabase.table("instituciones").insert({
-                        "nombre": inst_limpia,
-                        "user_id": user_id
-                    }).execute()
-                get_biblioteca_instituciones.clear()
-                st.session_state["cat_activa"] = inst_limpia
-                st.session_state["msg_exito_cat"] = True
-                st.session_state.new_cat_key += 1
-                st.rerun()
+            st.markdown("**2. Crea una institución/catálogo maestro:**")
+            with st.form("form_crear_institucion", border=False):
+                c_nc1, c_nc2 = st.columns([3, 1])
+                nueva_inst = c_nc1.text_input("Nombre de institución:", label_visibility="collapsed", key=f"input_nueva_cat_{st.session_state.new_cat_key}", placeholder="Ej: ISSSTE, SEDENA...")
+                btn_crear = c_nc2.form_submit_button("Crear", use_container_width=True)
+                if btn_crear and nueva_inst.strip():
+                    inst_limpia = nueva_inst.strip()
+                    res_chk = supabase.table("instituciones").select("id").eq("nombre", inst_limpia).or_(f"user_id.eq.{user_id},user_id.is.null").execute()
+                    if not res_chk.data:
+                        supabase.table("instituciones").insert({
+                            "nombre": inst_limpia,
+                            "user_id": user_id
+                        }).execute()
+                    get_biblioteca_instituciones.clear()
+                    st.session_state["pending_cat_activa"] = inst_limpia
+                    st.session_state["msg_exito_cat"] = True
+                    st.session_state.new_cat_key += 1
+                    st.rerun()
             
             if st.session_state.get("msg_exito_cat"):
                 st.success("✅ Institución creada exitosamente")
@@ -861,23 +1108,15 @@ with tab_biblioteca:
             if excel_bib and st.button("Cargar a Biblioteca Global", type="primary"):
                 try:
                     df_b = pd.read_excel(excel_bib)
-                    if not all(col in df_b.columns for col in ["Especialidad (Opcional)", "Categoria (Opcional)", "Clave", "Descripcion", "Unidad", "Precio_Unitario"]):
-                        st.error("⚠️ El formato del Excel no coincide. Descarga la plantilla oficial V2.")
+                    ok, error_msg, records_b = procesar_excel_importacion(df_b, tipo="biblioteca")
+                    if not ok:
+                        st.error(f"⚠️ {error_msg}")
+                    elif not records_b:
+                        st.warning("⚠️ No se encontraron filas con datos válidos (clave y descripción requeridas).")
                     else:
-                        df_b = df_b.fillna("")
-                        df_b["Precio_Unitario"] = pd.to_numeric(df_b["Precio_Unitario"], errors="coerce").fillna(0.0)
-                        records_b = []
-                        for _, row in df_b.iterrows():
-                            records_b.append({
-                                "user_id": user_id, 
-                                "institucion": cat_bib_sel, 
-                                "especialidad": str(row["Especialidad (Opcional)"]).strip(), 
-                                "categoria": str(row["Categoria (Opcional)"]).strip(),
-                                "clave": str(row["Clave"]).strip(), 
-                                "descripcion": str(row["Descripcion"]).strip(),
-                                "unidad": normalizar_unidad(str(row["Unidad"])), 
-                                "precio_referencial": float(row["Precio_Unitario"])
-                            })
+                        for r in records_b:
+                            r["user_id"] = user_id
+                            r["institucion"] = cat_bib_sel
                         for chunk in [records_b[i:i+50] for i in range(0, len(records_b), 50)]:
                             supabase.table("biblioteca_conceptos").insert(chunk).execute()
                         get_biblioteca_conceptos.clear()
@@ -886,7 +1125,7 @@ with tab_biblioteca:
                         st.success(f"✅ {len(records_b)} conceptos guardados en {cat_bib_sel}.")
                         st.rerun()
                 except Exception as e: 
-                    st.error(f"Error procesando: {e}")
+                    st.error(f"Error procesando el archivo: {e}")
         
         with st.expander("➕ Alta manual (Concepto Maestro)"):
             with st.form("form_alta_bib", clear_on_submit=True):
@@ -941,38 +1180,92 @@ with tab_biblioteca:
         df_admin = pd.DataFrame(lista_admin_bib)
         df_admin.insert(0, "#", range(1, len(df_admin) + 1))
         
+        df_admin["clave"] = df_admin["clave"].fillna("").astype(str)
         df_admin["categoria"] = df_admin["categoria"].fillna("").astype(str)
         df_admin["especialidad"] = df_admin["especialidad"].fillna("").astype(str)
+        df_admin["descripcion"] = df_admin["descripcion"].fillna("").astype(str)
+        df_admin["precio_referencial"] = pd.to_numeric(df_admin["precio_referencial"], errors="coerce").fillna(0.0).astype(float)
         
+        ed_bib_key = f"editor_biblioteca_{cat_bib_sel}_{st.session_state.get('ed_bib_counter', 0)}"
+
         edited_bib = st.data_editor(
             df_admin[["#", "clave", "especialidad", "categoria", "unidad", "precio_referencial", "descripcion"]],
             column_config={
                 "#": st.column_config.NumberColumn("#", disabled=True), 
-                "clave": st.column_config.TextColumn("Clave"),
+                "clave": st.column_config.TextColumn("Clave", required=True),
                 "especialidad": st.column_config.TextColumn("Especialidad"), 
                 "categoria": st.column_config.TextColumn("Categoría"),
-                "unidad": st.column_config.SelectboxColumn("Unidad", options=unidades_list),
-                "precio_referencial": st.column_config.NumberColumn("Precio Unitario ($)", format="$%.2f", min_value=0.0, step=10.0),
+                "unidad": st.column_config.SelectboxColumn("Unidad", options=unidades_list, required=True),
+                "precio_referencial": st.column_config.NumberColumn("Precio Unitario ($)", format="$%.2f", min_value=0.0, step=10.0, required=True),
                 "descripcion": st.column_config.TextColumn("Descripción")
             },
             use_container_width=True, 
             hide_index=True, 
-            key="editor_biblioteca"
+            key=ed_bib_key
         )
         
-        if "editor_biblioteca" in st.session_state and st.session_state["editor_biblioteca"].get("edited_rows", {}):
-            for row_str, col_vals in st.session_state["editor_biblioteca"]["edited_rows"].items():
-                id_bib_mod, up_b = lista_admin_bib[int(row_str)]["id"], {}
-                for campo in ["clave", "especialidad", "categoria", "descripcion"]:
+        if ed_bib_key in st.session_state and st.session_state[ed_bib_key].get("edited_rows", {}):
+            error_bib_msg = None
+            cambios_bib_guardados = 0
+
+            for row_str, col_vals in list(st.session_state[ed_bib_key]["edited_rows"].items()):
+                try:
+                    r_idx = int(row_str)
+                except ValueError:
+                    continue
+                if r_idx >= len(lista_admin_bib):
+                    continue
+
+                bib_actual = lista_admin_bib[r_idx]
+                id_bib_mod = bib_actual["id"]
+                up_b = {}
+
+                if "clave" in col_vals:
+                    val_c = col_vals["clave"]
+                    if val_c is None or not str(val_c).strip():
+                        error_bib_msg = "⚠️ La clave del concepto maestro es obligatoria y no puede quedar vacía."
+                        break
+                    up_b["clave"] = str(val_c).strip()
+
+                for campo in ["especialidad", "categoria", "descripcion"]:
                     if campo in col_vals: 
-                        up_b[campo] = str(col_vals[campo]).strip()
+                        up_b[campo] = str(col_vals[campo] or "").strip()
+
                 if "unidad" in col_vals: 
-                    up_b["unidad"] = normalizar_unidad(col_vals["unidad"])
+                    if col_vals["unidad"]:
+                        up_b["unidad"] = normalizar_unidad(col_vals["unidad"])
+                    else:
+                        error_bib_msg = "⚠️ La unidad del concepto maestro es obligatoria."
+                        break
+
                 if "precio_referencial" in col_vals: 
-                    up_b["precio_referencial"] = float(col_vals["precio_referencial"])
-                supabase.table("biblioteca_conceptos").update(up_b).eq("id", id_bib_mod).execute()
+                    val_pr = col_vals["precio_referencial"]
+                    if val_pr is None or str(val_pr).strip() in ("", "None", "nan"):
+                        up_b["precio_referencial"] = float(bib_actual.get("precio_referencial") or 0.0)
+                    else:
+                        try:
+                            up_b["precio_referencial"] = max(0.0, float(val_pr))
+                        except (ValueError, TypeError):
+                            up_b["precio_referencial"] = float(bib_actual.get("precio_referencial") or 0.0)
+
+                if up_b:
+                    try:
+                        supabase.table("biblioteca_conceptos").update(up_b).eq("id", id_bib_mod).execute()
+                        cambios_bib_guardados += 1
+                    except Exception as e:
+                        error_bib_msg = f"⚠️ Error al actualizar el concepto maestro: {e}"
+                        break
+
+            if error_bib_msg:
+                st.toast(error_bib_msg, icon="⚠️")
+                st.session_state["ed_bib_counter"] = st.session_state.get("ed_bib_counter", 0) + 1
+                st.session_state.pop(ed_bib_key, None)
+                st.rerun()
+            elif cambios_bib_guardados > 0:
                 get_biblioteca_conceptos.clear()
                 st.toast("✅ Concepto maestro actualizado.")
+                st.session_state["ed_bib_counter"] = st.session_state.get("ed_bib_counter", 0) + 1
+                st.session_state.pop(ed_bib_key, None)
                 st.rerun()
     else:
         st.info(f"ℹ️ La institución '{cat_bib_sel}' no tiene conceptos registrados aún. Utiliza las opciones de arriba para importar desde Excel o dar de alta conceptos manualmente.")
@@ -1034,23 +1327,59 @@ with tab_proyectos:
         cols_mostrar = ["#", "nombre_obra", "unidad", "contrato_no", "concurso_no", "ubicacion", "contratista", "residente_obra"]
         for c_m in cols_mostrar[1:]: df_p[c_m] = df_p[c_m].fillna("").astype(str)
 
+        ed_proy_key = f"editor_proyectos_{st.session_state.get('ed_proy_counter', 0)}"
         edited_proy = st.data_editor(
             df_p[cols_mostrar],
             column_config={
-                "#": st.column_config.NumberColumn("#", disabled=True), "nombre_obra": st.column_config.TextColumn("Nombre de la Obra"),
+                "#": st.column_config.NumberColumn("#", disabled=True), "nombre_obra": st.column_config.TextColumn("Nombre de la Obra", required=True),
                 "unidad": st.column_config.TextColumn("Unidad Médica"), "contrato_no": st.column_config.TextColumn("Contrato N°"),
                 "concurso_no": st.column_config.TextColumn("Licitación N°"), "ubicacion": st.column_config.TextColumn("Ubicación"),
                 "contratista": st.column_config.TextColumn("Contratista"), "residente_obra": st.column_config.TextColumn("Residente / Supervisor")
             },
-            use_container_width=True, hide_index=True, key="editor_proyectos"
+            use_container_width=True, hide_index=True, key=ed_proy_key
         )
 
-        if "editor_proyectos" in st.session_state and st.session_state["editor_proyectos"].get("edited_rows", {}):
-            for row_str, col_vals in st.session_state["editor_proyectos"]["edited_rows"].items():
-                id_proy_mod, up_p = lista_proyectos[int(row_str)]["id"], {}
-                for campo in ["nombre_obra", "unidad", "contrato_no", "concurso_no", "ubicacion", "contratista", "residente_obra"]:
-                    if campo in col_vals: up_p[campo] = col_vals[campo].strip()
-                supabase.table("proyectos").update(up_p).eq("id", id_proy_mod).execute()
+        if ed_proy_key in st.session_state and st.session_state[ed_proy_key].get("edited_rows", {}):
+            error_p_msg = None
+            cambios_p_guardados = 0
+            for row_str, col_vals in list(st.session_state[ed_proy_key]["edited_rows"].items()):
+                try:
+                    r_idx = int(row_str)
+                except ValueError:
+                    continue
+                if r_idx >= len(lista_proyectos):
+                    continue
+
+                id_proy_mod = lista_proyectos[r_idx]["id"]
+                up_p = {}
+
+                if "nombre_obra" in col_vals:
+                    val_nom = col_vals["nombre_obra"]
+                    if val_nom is None or not str(val_nom).strip():
+                        error_p_msg = "⚠️ El nombre de la obra es obligatorio y no puede quedar vacío."
+                        break
+                    up_p["nombre_obra"] = str(val_nom).strip()
+
+                for campo in ["unidad", "contrato_no", "concurso_no", "ubicacion", "contratista", "residente_obra"]:
+                    if campo in col_vals:
+                        up_p[campo] = str(col_vals[campo] or "").strip()
+
+                if up_p:
+                    try:
+                        supabase.table("proyectos").update(up_p).eq("id", id_proy_mod).execute()
+                        cambios_p_guardados += 1
+                    except Exception as e:
+                        error_p_msg = f"⚠️ Error al actualizar el proyecto: {e}"
+                        break
+
+            if error_p_msg:
+                st.toast(error_p_msg, icon="⚠️")
+                st.session_state["ed_proy_counter"] = st.session_state.get("ed_proy_counter", 0) + 1
+                st.session_state.pop(ed_proy_key, None)
+                st.rerun()
+            elif cambios_p_guardados > 0:
                 get_proyectos.clear()
                 st.toast("✅ Datos de la obra actualizados.")
+                st.session_state["ed_proy_counter"] = st.session_state.get("ed_proy_counter", 0) + 1
+                st.session_state.pop(ed_proy_key, None)
                 st.rerun()

@@ -32,3 +32,5 @@ desktop.ini
 
 # Ignorar carpeta completa de pruebas y plantillas locales
 test_files/
+# Entorno de pruebas y capturas temporales del agente
+scratch/
