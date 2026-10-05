@@ -13,7 +13,7 @@ importlib.reload(modulos.db_engine)
 
 from modulos.auth_engine import render_login_card
 from modulos.db_engine import (
-    normalizar_unidad, unidades_list, get_proyectos, get_biblioteca_instituciones,
+    normalizar_unidad, unidades_list, admite_decimales, get_proyectos, get_biblioteca_instituciones,
     get_biblioteca_conceptos, get_conceptos, get_estimaciones, get_mediciones,
     generar_plantilla_excel, extraer_nombre_archivo, optimizar_imagen,
     procesar_excel_importacion
@@ -43,6 +43,7 @@ if "logout" in params:
         st.experimental_set_query_params()
     try: supabase.auth.sign_out()
     except Exception: pass
+    st.cache_data.clear()
     st.session_state.clear()
     st.rerun()
 
@@ -314,10 +315,10 @@ with tab_dashboard:
                         "#": st.column_config.NumberColumn("#", width=50),
                         "Clave": st.column_config.TextColumn("Clave", width=w_clave_dyn),
                         "Unidad": st.column_config.TextColumn("Unidad", width=65),
-                        "Cant. Contratada": st.column_config.NumberColumn("Cant. Contratada", width=105),
-                        "Cant. en Periodo": st.column_config.NumberColumn("Cant. en Periodo", width=105),
-                        "Cant. Acumulada": st.column_config.NumberColumn("Cant. Acumulada", width=105),
-                        "Saldo Físico": st.column_config.NumberColumn("Saldo Físico", width=95),
+                        "Cant. Contratada": st.column_config.NumberColumn("Cant. Contratada", format="%.2f", width=105),
+                        "Cant. en Periodo": st.column_config.NumberColumn("Cant. en Periodo", format="%.2f", width=105),
+                        "Cant. Acumulada": st.column_config.NumberColumn("Cant. Acumulada", format="%.2f", width=105),
+                        "Saldo Físico": st.column_config.NumberColumn("Saldo Físico", format="%.2f", width=95),
                         "P.U. ($)": st.column_config.NumberColumn("P.U. ($)", format="$%.2f", width=90),
                         "Importe Periodo ($)": st.column_config.NumberColumn("Importe Periodo ($)", format="$%.2f", width=125),
                         "Importe Acumulado ($)": st.column_config.NumberColumn("Importe Acumulado ($)", format="$%.2f", width=125),
@@ -815,14 +816,19 @@ with tab_catalogo:
         proy_id = proyectos_dict[proy_sel]
 
         categorias_disp = get_biblioteca_instituciones(user_id)
-        cat_sel = st.selectbox("Institución/catálogo maestro (Para importar):", categorias_disp, key="sel_cat_bib_2")
-        conceptos_bib = get_biblioteca_conceptos(cat_sel, user_id)
+        if categorias_disp:
+            cat_sel = st.selectbox("Institución/catálogo maestro (Para importar):", categorias_disp, key="sel_cat_bib_2")
+            conceptos_bib = get_biblioteca_conceptos(cat_sel, user_id) if cat_sel else []
+        else:
+            cat_sel = None
+            conceptos_bib = []
+            st.info("ℹ️ No tienes instituciones registradas en tu Biblioteca Maestra. Puedes crearlas en la pestaña 'Biblioteca Maestra de Conceptos'.")
 
         col_import1, col_import2 = st.columns(2)
 
         with col_import1:
             with st.expander("📦 Importación Lote desde Biblioteca"):
-                if not conceptos_bib: st.info(f"No hay conceptos en '{cat_sel}'.")
+                if not conceptos_bib: st.info(f"No hay conceptos disponibles en '{cat_sel or 'Biblioteca'}'.")
                 else:
                     opciones_lote = {f"{c['clave']} — {c['descripcion'][:60]}...": c for c in conceptos_bib}
                     seleccionados_lote = st.multiselect("Seleccionar conceptos:", list(opciones_lote.keys()), key=f"ms_lote_{st.session_state.ms_lote_key}")
@@ -852,18 +858,24 @@ with tab_catalogo:
                     obj_u = opciones_unico[st.selectbox("Concepto maestro:", list(opciones_unico.keys()), key="sel_unico")]
                     with st.form("form_importar_bib", clear_on_submit=True):
                         c_cu1, c_cu2 = st.columns(2)
-                        cant_u = c_cu1.number_input("Cantidad Contratada", min_value=0.001, value=1.0, step=1.0)
-                        pu_u = c_cu2.number_input("Precio Unitario ($)", min_value=0.0, value=float(obj_u.get("precio_referencial") or 0.0), step=10.0)
+                        cant_u = c_cu1.number_input("Cantidad Contratada", min_value=0.01, value=1.0, step=0.5, format="%.2f")
+                        pu_u = c_cu2.number_input("Precio Unitario ($)", min_value=0.0, value=float(obj_u.get("precio_referencial") or 0.0), step=0.5, format="%.2f")
                         if st.form_submit_button("➕ Agregar al Contrato"):
-                            supabase.table("catalogo_conceptos").insert({
-                                "id_proyecto": proy_id, "especialidad": obj_u.get("especialidad"),
-                                "categoria": obj_u.get("categoria"), "clave": obj_u["clave"], 
-                                "descripcion": obj_u["descripcion"], "unidad": normalizar_unidad(obj_u["unidad"]),
-                                "cantidad_contratada": cant_u, "precio_unitario": pu_u
-                            }).execute()
-                            get_conceptos.clear()
-                            st.success("Concepto agregado.")
-                            st.rerun()
+                            u_u_norm = normalizar_unidad(obj_u["unidad"])
+                            if not admite_decimales(u_u_norm) and not float(cant_u).is_integer():
+                                st.error(f"⚠️ Para la unidad '{u_u_norm}', la cantidad contratada debe ser un número entero.")
+                            else:
+                                cant_u_final = round(float(cant_u)) if not admite_decimales(u_u_norm) else round(float(cant_u), 2)
+                                pu_u_final = round(float(pu_u), 2)
+                                supabase.table("catalogo_conceptos").insert({
+                                    "id_proyecto": proy_id, "especialidad": obj_u.get("especialidad"),
+                                    "categoria": obj_u.get("categoria"), "clave": obj_u["clave"], 
+                                    "descripcion": obj_u["descripcion"], "unidad": u_u_norm,
+                                    "cantidad_contratada": cant_u_final, "precio_unitario": pu_u_final
+                                }).execute()
+                                get_conceptos.clear()
+                                st.success("Concepto agregado.")
+                                st.rerun()
 
         with col_import2:
             with st.expander("📂 Subir desde Excel (Carga Masiva al Contrato)"):
@@ -897,20 +909,26 @@ with tab_catalogo:
                     unidad_m = st.selectbox("Unidad", unidades_list)
                     desc_m = st.text_area("Descripción detallada *", placeholder="Ingrese la descripción completa...")
                     c_cant_m, c_pu_m = st.columns(2)
-                    cant_m = c_cant_m.number_input("Cantidad Contratada", min_value=0.001, value=1.0, step=1.0)
-                    pu_m = c_pu_m.number_input("Precio Unitario ($)", min_value=0.0, value=0.0, step=10.0)
+                    cant_m = c_cant_m.number_input("Cantidad Contratada", min_value=0.01, value=1.0, step=0.5, format="%.2f")
+                    pu_m = c_pu_m.number_input("Precio Unitario ($)", min_value=0.0, value=0.0, step=0.5, format="%.2f")
                     
                     if st.form_submit_button("Guardar en Catálogo"):
                         if not clave_m.strip() or not desc_m.strip(): st.error("Clave y descripción obligatorias.")
                         else:
-                            supabase.table("catalogo_conceptos").insert({
-                                "id_proyecto": proy_id, "especialidad": esp_m.strip(), "categoria": cat_m.strip(),
-                                "clave": clave_m.strip(), "descripcion": desc_m.strip(), "unidad": normalizar_unidad(unidad_m), 
-                                "cantidad_contratada": cant_m, "precio_unitario": pu_m
-                            }).execute()
-                            get_conceptos.clear()
-                            st.success("✅ Guardado exitosamente.")
-                            st.rerun()
+                            u_m_norm = normalizar_unidad(unidad_m)
+                            if not admite_decimales(u_m_norm) and not float(cant_m).is_integer():
+                                st.error(f"⚠️ Para la unidad '{u_m_norm}', la cantidad contratada debe ser un número entero.")
+                            else:
+                                cant_m_final = round(float(cant_m)) if not admite_decimales(u_m_norm) else round(float(cant_m), 2)
+                                pu_m_final = round(float(pu_m), 2)
+                                supabase.table("catalogo_conceptos").insert({
+                                    "id_proyecto": proy_id, "especialidad": esp_m.strip(), "categoria": cat_m.strip(),
+                                    "clave": clave_m.strip(), "descripcion": desc_m.strip(), "unidad": u_m_norm, 
+                                    "cantidad_contratada": cant_m_final, "precio_unitario": pu_m_final
+                                }).execute()
+                                get_conceptos.clear()
+                                st.success("✅ Guardado exitosamente.")
+                                st.rerun()
 
         conceptos_proyecto = get_conceptos(proy_id)
         dict_conc_borrar = {f"#{idx} — {c['clave']} ({c['descripcion'][:45]}...)": c for idx, c in enumerate(conceptos_proyecto, start=1)} if conceptos_proyecto else {}
@@ -944,8 +962,8 @@ with tab_catalogo:
             df_c["categoria"] = df_c["categoria"].fillna("").astype(str)
             df_c["especialidad"] = df_c["especialidad"].fillna("").astype(str)
             df_c["descripcion"] = df_c["descripcion"].fillna("").astype(str)
-            df_c["cantidad_contratada"] = pd.to_numeric(df_c["cantidad_contratada"], errors="coerce").fillna(0.0).astype(float)
-            df_c["precio_unitario"] = pd.to_numeric(df_c["precio_unitario"], errors="coerce").fillna(0.0).astype(float)
+            df_c["cantidad_contratada"] = pd.to_numeric(df_c["cantidad_contratada"], errors="coerce").fillna(0.0).astype(float).round(2)
+            df_c["precio_unitario"] = pd.to_numeric(df_c["precio_unitario"], errors="coerce").fillna(0.0).astype(float).round(2)
             
             ed_cat_key = f"editor_catalogo_{proy_id}_{st.session_state.get('ed_cat_counter', 0)}"
 
@@ -957,8 +975,8 @@ with tab_catalogo:
                     "especialidad": st.column_config.TextColumn("Especialidad"),
                     "categoria": st.column_config.TextColumn("Categoría"),
                     "unidad": st.column_config.SelectboxColumn("Unidad", options=unidades_list, required=True),
-                    "cantidad_contratada": st.column_config.NumberColumn("Cant. Contratada", min_value=0.0, step=1.0, required=True),
-                    "precio_unitario": st.column_config.NumberColumn("P.U. ($)", format="$%.2f", min_value=0.0, step=10.0, required=True),
+                    "cantidad_contratada": st.column_config.NumberColumn("Cant. Contratada", format="%.2f", min_value=0.0, step=0.01, required=True),
+                    "precio_unitario": st.column_config.NumberColumn("P.U. ($)", format="$%.2f", min_value=0.0, step=0.01, required=True),
                     "descripcion": st.column_config.TextColumn("Descripción")
                 },
                 use_container_width=True,
@@ -1004,14 +1022,20 @@ with tab_catalogo:
                             error_cat_msg = "⚠️ La unidad del concepto es obligatoria."
                             break
 
-                    # 4. Cantidad contratada: protección contra None/empty
+                    # 4. Cantidad contratada: protección contra None/empty y validación según unidad
                     if "cantidad_contratada" in col_vals:
                         val_c = col_vals["cantidad_contratada"]
                         if val_c is None or str(val_c).strip() in ("", "None", "nan"):
                             up_payload["cantidad_contratada"] = float(conc_actual.get("cantidad_contratada") or 0.0)
                         else:
                             try:
-                                up_payload["cantidad_contratada"] = max(0.0, float(val_c))
+                                val_c_num = float(val_c)
+                                u_eval = up_payload.get("unidad") or conc_actual.get("unidad") or ""
+                                if not admite_decimales(u_eval):
+                                    val_c_num = round(val_c_num)
+                                else:
+                                    val_c_num = round(val_c_num, 2)
+                                up_payload["cantidad_contratada"] = max(0.0, val_c_num)
                             except (ValueError, TypeError):
                                 up_payload["cantidad_contratada"] = float(conc_actual.get("cantidad_contratada") or 0.0)
 
@@ -1022,7 +1046,7 @@ with tab_catalogo:
                             up_payload["precio_unitario"] = float(conc_actual.get("precio_unitario") or 0.0)
                         else:
                             try:
-                                up_payload["precio_unitario"] = max(0.0, float(val_p))
+                                up_payload["precio_unitario"] = round(max(0.0, float(val_p)), 2)
                             except (ValueError, TypeError):
                                 up_payload["precio_unitario"] = float(conc_actual.get("precio_unitario") or 0.0)
 
@@ -1056,23 +1080,28 @@ with tab_biblioteca:
     cats_bib = get_biblioteca_instituciones(user_id)
     if "pending_cat_activa" in st.session_state:
         st.session_state["cat_activa"] = st.session_state.pop("pending_cat_activa")
-    elif "cat_activa" not in st.session_state or st.session_state["cat_activa"] not in cats_bib:
-        st.session_state["cat_activa"] = cats_bib[0] if cats_bib else "IMSS"
-    
+    elif "cat_activa" not in st.session_state or (cats_bib and st.session_state["cat_activa"] not in cats_bib):
+        st.session_state["cat_activa"] = cats_bib[0] if cats_bib else None
+
+    cat_bib_sel = None
     col_b1, col_b2 = st.columns(2)
     with col_b1:
         with st.container(border=True):
             st.markdown("**1. Selecciona o elimina una institución/catálogo maestro:**")
             c_bc1, c_bc2 = st.columns([3, 1])
-            cat_bib_sel = c_bc1.selectbox("Institución:", cats_bib, key="cat_activa", label_visibility="collapsed")
+            if cats_bib:
+                idx_sel = cats_bib.index(st.session_state["cat_activa"]) if st.session_state.get("cat_activa") in cats_bib else 0
+                cat_bib_sel = c_bc1.selectbox("Institución:", cats_bib, index=idx_sel, key="cat_activa", label_visibility="collapsed")
+            else:
+                c_bc1.selectbox("Institución:", ["(Sin instituciones)"], disabled=True, label_visibility="collapsed")
 
-            if c_bc2.button("Eliminar", type="primary", use_container_width=True):
+            if c_bc2.button("Eliminar", type="primary", use_container_width=True, disabled=(not cat_bib_sel)):
                 if cat_bib_sel:
-                    supabase.table("instituciones").delete().eq("nombre", cat_bib_sel).execute()
-                    supabase.table("biblioteca_conceptos").delete().eq("institucion", cat_bib_sel).execute()
+                    supabase.table("instituciones").delete().eq("nombre", cat_bib_sel).eq("user_id", user_id).execute()
+                    supabase.table("biblioteca_conceptos").delete().eq("institucion", cat_bib_sel).eq("user_id", user_id).execute()
                     get_biblioteca_instituciones.clear()
                     get_biblioteca_conceptos.clear()
-                    st.session_state["pending_cat_activa"] = "IMSS"
+                    st.session_state["pending_cat_activa"] = cats_bib[0] if (len(cats_bib) > 1 and cats_bib[0] != cat_bib_sel) else ""
                     st.rerun()
 
     with col_b2:
@@ -1084,7 +1113,7 @@ with tab_biblioteca:
                 btn_crear = c_nc2.form_submit_button("Crear", use_container_width=True)
                 if btn_crear and nueva_inst.strip():
                     inst_limpia = nueva_inst.strip()
-                    res_chk = supabase.table("instituciones").select("id").eq("nombre", inst_limpia).or_(f"user_id.eq.{user_id},user_id.is.null").execute()
+                    res_chk = supabase.table("instituciones").select("id").eq("nombre", inst_limpia).eq("user_id", user_id).execute()
                     if not res_chk.data:
                         supabase.table("instituciones").insert({
                             "nombre": inst_limpia,
@@ -1134,7 +1163,7 @@ with tab_biblioteca:
                 clave_m = st.text_input("Clave de Concepto *", placeholder="Ej: OC01-015-126")
                 unidad_m = st.selectbox("Unidad", unidades_list)
                 desc_m = st.text_area("Descripción detallada *", placeholder="Ingrese la descripción completa...")
-                pu_m = st.number_input("Precio Unitario ($)", min_value=0.0, value=0.0, step=10.0)
+                pu_m = st.number_input("Precio Unitario ($)", min_value=0.0, value=0.0, step=0.5, format="%.2f")
                 if st.form_submit_button("Guardar en Biblioteca"):
                     if not clave_m.strip() or not desc_m.strip(): 
                         st.error("Clave y descripción son obligatorias.")
@@ -1147,7 +1176,7 @@ with tab_biblioteca:
                             "clave": clave_m.strip(), 
                             "descripcion": desc_m.strip(), 
                             "unidad": normalizar_unidad(unidad_m), 
-                            "precio_referencial": pu_m
+                            "precio_referencial": round(float(pu_m), 2)
                         }).execute()
                         get_biblioteca_conceptos.clear()
                         get_biblioteca_instituciones.clear()
@@ -1184,7 +1213,7 @@ with tab_biblioteca:
         df_admin["categoria"] = df_admin["categoria"].fillna("").astype(str)
         df_admin["especialidad"] = df_admin["especialidad"].fillna("").astype(str)
         df_admin["descripcion"] = df_admin["descripcion"].fillna("").astype(str)
-        df_admin["precio_referencial"] = pd.to_numeric(df_admin["precio_referencial"], errors="coerce").fillna(0.0).astype(float)
+        df_admin["precio_referencial"] = pd.to_numeric(df_admin["precio_referencial"], errors="coerce").fillna(0.0).astype(float).round(2)
         
         ed_bib_key = f"editor_biblioteca_{cat_bib_sel}_{st.session_state.get('ed_bib_counter', 0)}"
 
@@ -1196,7 +1225,7 @@ with tab_biblioteca:
                 "especialidad": st.column_config.TextColumn("Especialidad"), 
                 "categoria": st.column_config.TextColumn("Categoría"),
                 "unidad": st.column_config.SelectboxColumn("Unidad", options=unidades_list, required=True),
-                "precio_referencial": st.column_config.NumberColumn("Precio Unitario ($)", format="$%.2f", min_value=0.0, step=10.0, required=True),
+                "precio_referencial": st.column_config.NumberColumn("Precio Unitario ($)", format="$%.2f", min_value=0.0, step=0.01, required=True),
                 "descripcion": st.column_config.TextColumn("Descripción")
             },
             use_container_width=True, 
@@ -1244,7 +1273,7 @@ with tab_biblioteca:
                         up_b["precio_referencial"] = float(bib_actual.get("precio_referencial") or 0.0)
                     else:
                         try:
-                            up_b["precio_referencial"] = max(0.0, float(val_pr))
+                            up_b["precio_referencial"] = round(max(0.0, float(val_pr)), 2)
                         except (ValueError, TypeError):
                             up_b["precio_referencial"] = float(bib_actual.get("precio_referencial") or 0.0)
 

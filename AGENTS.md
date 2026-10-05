@@ -54,8 +54,8 @@ Al realizar validaciones completas, el agente debe cubrir el flujo de vida compl
 2. **Desacople Institución vs Categoría**:
    - `instituciones`: Tabla propia en Supabase. NUNCA usar registros dummy 'INIT'.
    - `categoria`: Subpartida/partida opcional dentro de los conceptos.
-3. **Persistencia Multiusuario Retrocompatible**:
-   - Toda consulta debe incluir: `.or_(f"user_id.eq.{user_id},user_id.is.null")`.
+3. **Persistencia y Aislamiento Multiusuario Estricto (RLS)**:
+   - Toda consulta e inserción debe vincular y filtrar explícitamente por el `user_id` de la sesión activa (`.eq("user_id", user_id)` o relación de propiedad de proyecto). NUNCA depender de registros globales o huérfanos con `user_id` nulo. Row Level Security (RLS) se encuentra activo en las 7 tablas de la base de datos.
 4. **Normalización de Unidades**:
    - Obligatorio usar `normalizar_unidad()` de `./modulos/db_engine.py`.
 5. **Limpieza de Formularios sin Romper Sesión**:

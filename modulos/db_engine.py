@@ -23,24 +23,30 @@ def normalizar_unidad(u: str) -> str:
     return u_up.lower()
 
 unidades_list = ["m²", "m³", "litros", "kg", "pza", "lote", "jgo", "tramo", "m", "mano de obra (h)", "m³/km", "s/u"]
+UNIDADES_ENTERAS = {"pza", "jgo"}
+
+def admite_decimales(unidad: str) -> bool:
+    """Retorna False si la unidad es estrictamente discreta/entera (pza, jgo), True en caso contrario."""
+    u_norm = normalizar_unidad(unidad)
+    return u_norm not in UNIDADES_ENTERAS
 
 @st.cache_data(show_spinner=False)
 def get_proyectos(user_id: str):
     supabase = st.session_state["supabase_client"]
-    res = supabase.table("proyectos").select("*").or_(f"user_id.eq.{user_id},user_id.is.null").order("id").execute()
+    res = supabase.table("proyectos").select("*").eq("user_id", user_id).order("id").execute()
     return res.data or []
 
 @st.cache_data(show_spinner=False)
 def get_biblioteca_instituciones(user_id: str):
-    """Consulta 'instituciones' y 'biblioteca_conceptos' para asegurar que aparezcan todas sin duplicados."""
+    """Consulta 'instituciones' y 'biblioteca_conceptos' del usuario activo sin duplicados ni huérfanos."""
     supabase = st.session_state["supabase_client"]
-    insts = set(["IMSS", "Poder Judicial de la Federación"])
+    insts = set()
     
-    # 1. Leer de la tabla dedicada 'instituciones'
+    # 1. Leer de la tabla dedicada 'instituciones' del usuario
     try:
         res_inst = supabase.table("instituciones")\
             .select("nombre")\
-            .or_(f"user_id.eq.{user_id},user_id.is.null")\
+            .eq("user_id", user_id)\
             .execute()
         for r in (res_inst.data or []):
             nom = (r.get("nombre") or "").strip()
@@ -49,11 +55,11 @@ def get_biblioteca_instituciones(user_id: str):
     except Exception:
         pass
 
-    # 2. Leer de 'biblioteca_conceptos' por retrocompatibilidad
+    # 2. Leer de 'biblioteca_conceptos' del usuario
     try:
         res_bib = supabase.table("biblioteca_conceptos")\
             .select("institucion")\
-            .or_(f"user_id.eq.{user_id},user_id.is.null")\
+            .eq("user_id", user_id)\
             .execute()
         for r in (res_bib.data or []):
             nom = (r.get("institucion") or "").strip()
@@ -66,12 +72,14 @@ def get_biblioteca_instituciones(user_id: str):
 
 @st.cache_data(show_spinner=False)
 def get_biblioteca_conceptos(institucion: str, user_id: str):
-    """Obtiene los conceptos maestros filtrando por la institución activa."""
+    """Obtiene los conceptos maestros filtrando por la institución activa y user_id."""
+    if not institucion:
+        return []
     supabase = st.session_state["supabase_client"]
     res = supabase.table("biblioteca_conceptos")\
         .select("*")\
         .or_(f"institucion.eq.{institucion},categoria.eq.{institucion}")\
-        .or_(f"user_id.eq.{user_id},user_id.is.null")\
+        .eq("user_id", user_id)\
         .order("clave")\
         .execute()
     return res.data or []
@@ -156,7 +164,7 @@ def procesar_excel_importacion(df: pd.DataFrame, tipo="proyecto"):
             continue
         
         u = normalizar_unidad(str(row[c_unidad])) if c_unidad else "s/u"
-        pu = float(pd.to_numeric(row[c_pu], errors="coerce") or 0.0) if c_pu else 0.0
+        pu = round(float(pd.to_numeric(row[c_pu], errors="coerce") or 0.0), 2) if c_pu else 0.0
         esp = str(row[c_esp]).strip() if c_esp and not pd.isna(row[c_esp]) else ""
         cat = str(row[c_cat]).strip() if c_cat and not pd.isna(row[c_cat]) else ""
         
@@ -168,7 +176,8 @@ def procesar_excel_importacion(df: pd.DataFrame, tipo="proyecto"):
             "unidad": u
         }
         if tipo == "proyecto":
-            cant = float(pd.to_numeric(row[c_cant], errors="coerce") or 0.0) if c_cant else 0.0
+            cant_raw = float(pd.to_numeric(row[c_cant], errors="coerce") or 0.0) if c_cant else 0.0
+            cant = round(cant_raw) if not admite_decimales(u) else round(cant_raw, 2)
             rec["cantidad_contratada"] = cant
             rec["precio_unitario"] = pu
         else:
