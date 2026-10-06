@@ -10,10 +10,13 @@ import datetime
 import importlib
 import modulos.db_engine
 import modulos.auth_engine
+import modulos.admin_engine
 importlib.reload(modulos.db_engine)
 importlib.reload(modulos.auth_engine)
+importlib.reload(modulos.admin_engine)
 
 from modulos.auth_engine import render_login_card, render_user_profile_dialog
+from modulos.admin_engine import render_admin_dashboard
 from modulos.db_engine import (
     normalizar_unidad, unidades_list, admite_decimales, get_proyectos, get_biblioteca_instituciones,
     get_biblioteca_conceptos, get_conceptos, get_estimaciones, get_mediciones,
@@ -186,9 +189,32 @@ button[data-baseweb="tab"], button[data-baseweb="tab"] p, button[data-baseweb="t
     text-decoration: underline !important;
 }
 
-/* Ocultar disparador técnico del diálogo de perfil y puente JS */
+.admin-link {
+    color: #4338ca !important;
+    text-decoration: none !important;
+    font-weight: 600;
+    font-size: 0.78rem;
+    background: #e0e7ff;
+    padding: 2px 7px;
+    border-radius: 4px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    border: 1px solid #c7d2fe;
+    transition: all 0.15s ease;
+    cursor: pointer;
+}
+
+.admin-link:hover {
+    background-color: #c7d2fe !important;
+    color: #312e81 !important;
+    text-decoration: none !important;
+}
+
+/* Ocultar disparadores técnicos del diálogo de perfil y consola admin */
 div[data-testid="stElementContainer"]:has(#btn-trigger-mi-perfil-anchor),
-div[data-testid="stElementContainer"]:has(button[kind="secondary"][key="btn_trigger_mi_perfil"]) {
+div[data-testid="stElementContainer"]:has(button[key="btn_trigger_mi_perfil"]),
+div[data-testid="stElementContainer"]:has(button[key="btn_trigger_admin_console"]) {
     display: none !important;
     height: 0 !important;
     margin: 0 !important;
@@ -233,41 +259,65 @@ nom_usr = nom_solo if nom_solo else (st.session_state["user"].email.split("@")[0
 email_usr = st.session_state["user"].email
 empresa_usr = perfil_usr.get("empresa_despacho") or "Independiente"
 
+# Privilegios de Superadministrador (estrictamente booleano)
+if "es_admin" not in st.session_state:
+    if perfil_usr and "es_admin" in perfil_usr:
+        st.session_state["es_admin"] = bool(perfil_usr["es_admin"])
+    else:
+        try:
+            perf_db = supabase.table("perfiles").select("es_admin").eq("id", user_id).execute()
+            st.session_state["es_admin"] = bool(perf_db.data[0].get("es_admin", False)) if perf_db.data else False
+        except Exception:
+            st.session_state["es_admin"] = False
+
+es_admin_usr = bool(st.session_state.get("es_admin", False))
+if "vista_actual" not in st.session_state:
+    st.session_state["vista_actual"] = "obra"
+
+admin_link_html = ""
+if es_admin_usr:
+    admin_link_html = '<div style="margin-top: 4px;"><a href="javascript:void(0)" class="admin-link" title="Consola de Superadministrador">🛡️ Consola Administrador</a></div>'
+
 # =============================================================
 # ENCABEZADO UNIFICADO STICKY (UN SOLO CONTENEDOR)
 # =============================================================
-st.markdown(f"""
-<div class="sticky-header">
-    <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
-        <!-- Lado Izquierdo: Logo + Institución + Subtítulo -->
-        <div>
-            <div style="display: flex; align-items: baseline; gap: 12px; flex-wrap: nowrap;">
-                <h1 style='margin: 0; padding: 0; font-size: 2.3rem; line-height: 1.15; font-weight: 700; white-space: nowrap;'>
-                    Estimapp <span style='font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji";'>🏗</span>
-                </h1>
-                <span style='font-size: 1.1rem; font-weight: 500; color: #6c757d; border-left: 2px solid #cbd5e1; padding-left: 12px; white-space: nowrap;'>
-                    | {empresa_usr}
-                </span>
-            </div>
-            <div style='color: #6c757d; font-size: 1.0rem; margin-top: 2px; margin-bottom: 2px;'>
-                Control de avance físico y financiero de obra pública y privada
-            </div>
-        </div>
-        <!-- Lado Derecho: Usuario + Botón Salir -->
-        <div style="display: flex; align-items: center; gap: 16px;">
-            <div style='text-align: right; line-height: 1.25;'>
-                <div>
-                    <a href="javascript:void(0)" class="user-link" title="Haz clic para ver y editar tu perfil">
-                        {nom_usr}
-                    </a>
-                </div>
-                <div style='font-size: 0.8rem; color: #64748b;'>{email_usr}</div>
-            </div>
-            <a href="?logout=1" target="_self" class="btn-salir-link">Salir</a>
-        </div>
-    </div>
+st.markdown(f"""<div class="sticky-header">
+<div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+<div>
+<div style="display: flex; align-items: baseline; gap: 12px; flex-wrap: nowrap;">
+<h1 style='margin: 0; padding: 0; font-size: 2.3rem; line-height: 1.15; font-weight: 700; white-space: nowrap;'>
+Estimapp <span style='font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji";'>🏗</span>
+</h1>
+<span style='font-size: 1.1rem; font-weight: 500; color: #6c757d; border-left: 2px solid #cbd5e1; padding-left: 12px; white-space: nowrap;'>
+| {empresa_usr}
+</span>
 </div>
-""", unsafe_allow_html=True)
+<div style='color: #6c757d; font-size: 1.0rem; margin-top: 2px; margin-bottom: 2px;'>
+Control de avance físico y financiero de obra pública y privada
+</div>
+</div>
+<div style="display: flex; align-items: center; gap: 16px;">
+<div style='text-align: right; line-height: 1.25;'>
+<div>
+<a href="javascript:void(0)" class="user-link" title="Haz clic para ver y editar tu perfil">
+{nom_usr}
+</a>
+</div>
+<div style='font-size: 0.8rem; color: #64748b;'>{email_usr}</div>
+{admin_link_html}
+</div>
+<a href="?logout=1" target="_self" class="btn-salir-link">Salir</a>
+</div>
+</div>
+</div>""", unsafe_allow_html=True)
+
+# Disparador en segundo plano para alternar a la consola de administración
+if st.button("Alternar Consola Admin", key="btn_trigger_admin_console"):
+    if st.session_state.get("vista_actual") == "admin":
+        st.session_state["vista_actual"] = "obra"
+    else:
+        st.session_state["vista_actual"] = "admin"
+    st.rerun()
 
 # Disparador en segundo plano para abrir el modal de perfil sin recargar la página
 if st.button("Abrir Perfil", key="btn_trigger_mi_perfil"):
@@ -278,14 +328,17 @@ components.html("""
 <script>
 const doc = window.parent.document;
 function hideAndBindTrigger() {
-    // 1. Ocultar el contenedor del botón técnico para que no sea visible en la interfaz
-    const btn = Array.from(doc.querySelectorAll('button')).find(b => b.innerText.includes('Abrir Perfil'));
-    if (btn) {
-        const container = btn.closest('div[data-testid="stElementContainer"]');
-        if (container && container.style.display !== 'none') {
-            container.style.display = 'none';
+    // 1. Ocultar los contenedores de los botones técnicos
+    ['Abrir Perfil', 'Alternar Consola Admin'].forEach(txt => {
+        const btn = Array.from(doc.querySelectorAll('button')).find(b => b.innerText.includes(txt));
+        if (btn) {
+            const container = btn.closest('div[data-testid="stElementContainer"]');
+            if (container && container.style.display !== 'none') {
+                container.style.display = 'none';
+            }
         }
-    }
+    });
+
     // 2. Vincular el hipervínculo del usuario en el sticky-header
     const link = doc.querySelector('.sticky-header .user-link');
     if (link && !link.dataset.bound) {
@@ -294,6 +347,20 @@ function hideAndBindTrigger() {
             e.preventDefault();
             e.stopPropagation();
             const b = Array.from(doc.querySelectorAll('button')).find(btn => btn.innerText.includes('Abrir Perfil'));
+            if (b) {
+                b.click();
+            }
+        });
+    }
+
+    // 3. Vincular el enlace de la consola de administrador en el sticky-header
+    const adminLink = doc.querySelector('.sticky-header .admin-link');
+    if (adminLink && !adminLink.dataset.bound) {
+        adminLink.dataset.bound = "true";
+        adminLink.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const b = Array.from(doc.querySelectorAll('button')).find(btn => btn.innerText.includes('Alternar Consola Admin'));
             if (b) {
                 b.click();
             }
@@ -308,6 +375,13 @@ setInterval(hideAndBindTrigger, 200);
 # Modal de Cuenta / Perfil si fue invocado
 if st.session_state.get("mostrar_dialogo_cuenta"):
     render_user_profile_dialog(supabase, st.session_state["user"], st.session_state.get("perfil", {}))
+
+# =============================================================
+# CONMUTACIÓN DE VISTAS: CONSOLA DE ADMINISTRADOR
+# =============================================================
+if st.session_state.get("vista_actual") == "admin" and es_admin_usr:
+    render_admin_dashboard(supabase)
+    st.stop()
 
 # Generador de nombres dinámicos para evitar caché en descargas Excel
 ts_descarga = int(datetime.datetime.now().timestamp())

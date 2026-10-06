@@ -86,12 +86,14 @@ def render_login_card(supabase: Client):
                                     perf = supabase.table("perfiles").select("*").eq("id", res.user.id).execute()
                                     if perf.data:
                                         st.session_state["perfil"] = perf.data[0]
+                                        st.session_state["es_admin"] = bool(perf.data[0].get("es_admin", False))
                                     else:
                                         st.session_state["perfil"] = {
                                             "nombre": res.user.email.split("@")[0],
                                             "apellido_paterno": "",
                                             "empresa_despacho": "Despacho"
                                         }
+                                        st.session_state["es_admin"] = False
                                     st.success("¡Bienvenido!")
                                     st.rerun()
                             except Exception:
@@ -235,6 +237,7 @@ def render_login_card(supabase: Client):
                                         "apellido_paterno": ap_pat.strip(),
                                         "empresa_despacho": empresa.strip()
                                     }
+                                    st.session_state["es_admin"] = False
                                     st.success("¡Cuenta creada exitosamente!")
                                     st.session_state["auth_mode"] = "login"
                                     st.rerun()
