@@ -9,9 +9,11 @@ import datetime
 # =============================================================
 import importlib
 import modulos.db_engine
+import modulos.auth_engine
 importlib.reload(modulos.db_engine)
+importlib.reload(modulos.auth_engine)
 
-from modulos.auth_engine import render_login_card
+from modulos.auth_engine import render_login_card, render_user_profile_dialog
 from modulos.db_engine import (
     normalizar_unidad, unidades_list, admite_decimales, get_proyectos, get_biblioteca_instituciones,
     get_biblioteca_conceptos, get_conceptos, get_estimaciones, get_mediciones,
@@ -33,7 +35,7 @@ if "supabase_client" not in st.session_state:
 
 supabase: Client = st.session_state["supabase_client"]
 
-# Detector universal de Logout (Rápido y persistente)
+# Detector universal de Logout y Acceso a Cuenta
 params = st.query_params if hasattr(st, "query_params") else st.experimental_get_query_params()
 if "logout" in params:
     if hasattr(st, "query_params"):
@@ -45,6 +47,64 @@ if "logout" in params:
     except Exception: pass
     st.cache_data.clear()
     st.session_state.clear()
+    st.rerun()
+
+if "cuenta" in params or "perfil" in params:
+    if hasattr(st, "query_params"):
+        for qk in ["cuenta", "perfil"]:
+            try: del st.query_params[qk]
+            except Exception: pass
+    else:
+        st.experimental_set_query_params()
+    st.session_state["mostrar_dialogo_cuenta"] = True
+
+if "mode" in params and params["mode"] == "restablecer":
+    st.session_state["auth_mode"] = "restablecer"
+    if hasattr(st, "query_params"):
+        try: del st.query_params["mode"]
+        except Exception: pass
+    st.rerun()
+
+# Detector de Enlace de Recuperación de Contraseña (Supabase Auth)
+if "error" in params or "error_description" in params:
+    desc = params.get("error_description", "El enlace de recuperación es inválido o ha expirado.")
+    st.session_state["error_recuperacion"] = f"⚠️ {desc}"
+    st.session_state["auth_mode"] = "login"
+    if hasattr(st, "query_params"):
+        st.query_params.clear()
+    st.rerun()
+
+if ("type" in params and params.get("type") == "recovery") or "access_token" in params or "code" in params:
+    acc_token = params.get("access_token")
+    ref_token = params.get("refresh_token")
+    auth_code = params.get("code")
+    if acc_token and ref_token:
+        try:
+            res = supabase.auth.set_session(acc_token, ref_token)
+            if res.user:
+                st.session_state["recovery_user"] = res.user
+                st.session_state["auth_mode"] = "restablecer"
+            else:
+                st.session_state["error_recuperacion"] = "El enlace de recuperación es inválido o ha expirado. Por favor solicita uno nuevo."
+                st.session_state["auth_mode"] = "login"
+        except Exception:
+            st.session_state["error_recuperacion"] = "El enlace de recuperación es inválido o ha expirado. Por favor solicita uno nuevo."
+            st.session_state["auth_mode"] = "login"
+    elif auth_code:
+        try:
+            res = supabase.auth.exchange_code_for_session({"auth_code": auth_code})
+            if res.user:
+                st.session_state["recovery_user"] = res.user
+                st.session_state["auth_mode"] = "restablecer"
+            else:
+                st.session_state["error_recuperacion"] = "El enlace de recuperación es inválido o ha expirado. Por favor solicita uno nuevo."
+                st.session_state["auth_mode"] = "login"
+        except Exception:
+            st.session_state["error_recuperacion"] = "El enlace de recuperación es inválido o ha expirado. Por favor solicita uno nuevo."
+            st.session_state["auth_mode"] = "login"
+
+    if hasattr(st, "query_params"):
+        st.query_params.clear()
     st.rerun()
 
 # =============================================================
@@ -110,6 +170,42 @@ button[data-baseweb="tab"], button[data-baseweb="tab"] p, button[data-baseweb="t
     background-color: #fff5f5;
     text-decoration: none !important;
 }
+
+.user-link {
+    color: #1e293b !important;
+    text-decoration: none !important;
+    font-weight: 600;
+    font-size: 0.95rem;
+    transition: color 0.15s ease, text-decoration 0.15s ease;
+    cursor: pointer;
+    display: inline-block;
+}
+
+.user-link:hover {
+    color: #2563eb !important;
+    text-decoration: underline !important;
+}
+
+/* Ocultar disparador técnico del diálogo de perfil y puente JS */
+div[data-testid="stElementContainer"]:has(#btn-trigger-mi-perfil-anchor),
+div[data-testid="stElementContainer"]:has(button[kind="secondary"][key="btn_trigger_mi_perfil"]) {
+    display: none !important;
+    height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+}
+
+div[data-testid="stElementContainer"]:has(iframe[title="streamlit.components.v1.html"]) {
+    position: absolute !important;
+    width: 0px !important;
+    height: 0px !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+    overflow: hidden !important;
+    border: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -132,7 +228,8 @@ if "user" not in st.session_state or st.session_state["user"] is None:
 
 user_id = st.session_state["user"].id
 perfil_usr = st.session_state.get("perfil", {})
-nom_usr = perfil_usr.get("nombre") or st.session_state["user"].email.split("@")[0]
+nom_solo = (perfil_usr.get("nombre") or "").strip()
+nom_usr = nom_solo if nom_solo else (st.session_state["user"].email.split("@")[0])
 email_usr = st.session_state["user"].email
 empresa_usr = perfil_usr.get("empresa_despacho") or "Independiente"
 
@@ -153,13 +250,17 @@ st.markdown(f"""
                 </span>
             </div>
             <div style='color: #6c757d; font-size: 1.0rem; margin-top: 2px; margin-bottom: 2px;'>
-                Control de avance físico y financiero de obra
+                Control de avance físico y financiero de obra pública y privada
             </div>
         </div>
         <!-- Lado Derecho: Usuario + Botón Salir -->
         <div style="display: flex; align-items: center; gap: 16px;">
             <div style='text-align: right; line-height: 1.25;'>
-                <div style='font-weight: 600; font-size: 0.95rem; color: #1e293b;'>{nom_usr}</div>
+                <div>
+                    <a href="javascript:void(0)" class="user-link" title="Haz clic para ver y editar tu perfil">
+                        {nom_usr}
+                    </a>
+                </div>
                 <div style='font-size: 0.8rem; color: #64748b;'>{email_usr}</div>
             </div>
             <a href="?logout=1" target="_self" class="btn-salir-link">Salir</a>
@@ -167,6 +268,46 @@ st.markdown(f"""
     </div>
 </div>
 """, unsafe_allow_html=True)
+
+# Disparador en segundo plano para abrir el modal de perfil sin recargar la página
+if st.button("Abrir Perfil", key="btn_trigger_mi_perfil"):
+    st.session_state["mostrar_dialogo_cuenta"] = True
+
+import streamlit.components.v1 as components
+components.html("""
+<script>
+const doc = window.parent.document;
+function hideAndBindTrigger() {
+    // 1. Ocultar el contenedor del botón técnico para que no sea visible en la interfaz
+    const btn = Array.from(doc.querySelectorAll('button')).find(b => b.innerText.includes('Abrir Perfil'));
+    if (btn) {
+        const container = btn.closest('div[data-testid="stElementContainer"]');
+        if (container && container.style.display !== 'none') {
+            container.style.display = 'none';
+        }
+    }
+    // 2. Vincular el hipervínculo del usuario en el sticky-header
+    const link = doc.querySelector('.sticky-header .user-link');
+    if (link && !link.dataset.bound) {
+        link.dataset.bound = "true";
+        link.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const b = Array.from(doc.querySelectorAll('button')).find(btn => btn.innerText.includes('Abrir Perfil'));
+            if (b) {
+                b.click();
+            }
+        });
+    }
+}
+hideAndBindTrigger();
+setInterval(hideAndBindTrigger, 200);
+</script>
+""", height=0, width=0)
+
+# Modal de Cuenta / Perfil si fue invocado
+if st.session_state.get("mostrar_dialogo_cuenta"):
+    render_user_profile_dialog(supabase, st.session_state["user"], st.session_state.get("perfil", {}))
 
 # Generador de nombres dinámicos para evitar caché en descargas Excel
 ts_descarga = int(datetime.datetime.now().timestamp())
