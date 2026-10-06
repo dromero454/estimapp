@@ -1,5 +1,6 @@
 import streamlit as st
 from supabase import Client
+from modulos.db_engine import extraer_nombre_archivo
 
 def render_login_card(supabase: Client):
     """
@@ -86,13 +87,16 @@ def render_login_card(supabase: Client):
                                     perf = supabase.table("perfiles").select("*").eq("id", res.user.id).execute()
                                     if perf.data:
                                         st.session_state["perfil"] = perf.data[0]
-                                        st.session_state["es_admin"] = bool(perf.data[0].get("es_admin", False))
+                                        st.session_state["rol"] = perf.data[0].get("rol", "residente")
+                                        st.session_state["es_admin"] = bool(perf.data[0].get("es_admin", False)) or (st.session_state["rol"] == "superadmin")
                                     else:
                                         st.session_state["perfil"] = {
                                             "nombre": res.user.email.split("@")[0],
                                             "apellido_paterno": "",
-                                            "empresa_despacho": "Despacho"
+                                            "empresa_despacho": "Despacho",
+                                            "rol": "residente"
                                         }
+                                        st.session_state["rol"] = "residente"
                                         st.session_state["es_admin"] = False
                                     st.success("¡Bienvenido!")
                                     st.rerun()
@@ -228,15 +232,17 @@ def render_login_card(supabase: Client):
                                         "apellido_paterno": ap_pat.strip(),
                                         "apellido_materno": ap_mat.strip(),
                                         "empresa_despacho": empresa.strip() if empresa.strip() else "Independiente",
-                                        "rol": "usuario"
+                                        "rol": "residente"
                                     }).execute()
                                     
                                     st.session_state["user"] = auth_res.user
                                     st.session_state["perfil"] = {
                                         "nombre": nombre.strip(),
                                         "apellido_paterno": ap_pat.strip(),
-                                        "empresa_despacho": empresa.strip()
+                                        "empresa_despacho": empresa.strip(),
+                                        "rol": "residente"
                                     }
+                                    st.session_state["rol"] = "residente"
                                     st.session_state["es_admin"] = False
                                     st.success("¡Cuenta creada exitosamente!")
                                     st.session_state["auth_mode"] = "login"
@@ -250,7 +256,7 @@ def render_login_card(supabase: Client):
                     st.rerun()
 
 
-@st.dialog("👤 Mi Perfil y Cuenta", width="medium")
+@st.dialog("👤 Mi Perfil y Cuenta", width="medium", on_dismiss="rerun")
 def render_user_profile_dialog(supabase: Client, user, perfil: dict):
     """
     Modal de configuración de usuario para:
@@ -332,20 +338,57 @@ def render_user_profile_dialog(supabase: Client, user, perfil: dict):
                 except Exception:
                     pass
                 
-                # 2. Cascada de respaldo del lado cliente
+                # 2. Cascada segura del lado cliente
+                archivos_ev_usuario = []
+                archivos_bugs_usuario = []
+
+                # A. Identificar proyectos, estimaciones y recolectar fotos de mediciones
                 proys = supabase.table("proyectos").select("id").eq("user_id", user.id).execute().data or []
                 p_ids = [p["id"] for p in proys]
                 if p_ids:
                     ests = supabase.table("estimaciones").select("id").in_("id_proyecto", p_ids).execute().data or []
                     e_ids = [e["id"] for e in ests]
                     if e_ids:
+                        try:
+                            res_m_user = supabase.table("mediciones_campo").select("url_foto, url_croquis").in_("id_estimacion", e_ids).execute()
+                            for m_row in (res_m_user.data or []):
+                                if m_row.get("url_foto"):
+                                    nf = extraer_nombre_archivo(m_row["url_foto"])
+                                    if nf: archivos_ev_usuario.append(nf)
+                                if m_row.get("url_croquis"):
+                                    nc = extraer_nombre_archivo(m_row["url_croquis"])
+                                    if nc: archivos_ev_usuario.append(nc)
+                        except Exception:
+                            pass
                         supabase.table("mediciones_campo").delete().in_("id_estimacion", e_ids).execute()
                     supabase.table("estimaciones").delete().in_("id_proyecto", p_ids).execute()
                     supabase.table("catalogo_conceptos").delete().in_("id_proyecto", p_ids).execute()
                     supabase.table("proyectos").delete().eq("user_id", user.id).execute()
+
+                # B. Identificar tickets de soporte y recolectar archivos adjuntos
+                try:
+                    res_bugs_user = supabase.table("reportes_bugs").select("id, archivos_adjuntos").eq("user_id", user.id).execute()
+                    for b_row in (res_bugs_user.data or []):
+                        for adj in (b_row.get("archivos_adjuntos") or []):
+                            archivos_bugs_usuario.append(adj)
+                    supabase.table("reportes_bugs").delete().eq("user_id", user.id).execute()
+                except Exception:
+                    pass
+
                 supabase.table("biblioteca_conceptos").delete().eq("user_id", user.id).execute()
                 supabase.table("instituciones").delete().eq("user_id", user.id).execute()
                 supabase.table("perfiles").delete().eq("id", user.id).execute()
+
+                # C. Solo tras confirmarse la eliminación en BD, purgar archivos físicos de Storage
+                if archivos_ev_usuario:
+                    for chunk_ev in [archivos_ev_usuario[i:i+50] for i in range(0, len(archivos_ev_usuario), 50)]:
+                        try: supabase.storage.from_("evidencias").remove(chunk_ev)
+                        except Exception: pass
+
+                if archivos_bugs_usuario:
+                    for chunk_bg in [archivos_bugs_usuario[i:i+50] for i in range(0, len(archivos_bugs_usuario), 50)]:
+                        try: supabase.storage.from_("bugs").remove(chunk_bg)
+                        except Exception: pass
 
                 # 3. Cerrar sesión
                 try: supabase.auth.sign_out()

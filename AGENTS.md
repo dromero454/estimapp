@@ -50,7 +50,7 @@ Al realizar validaciones completas, el agente debe cubrir el flujo de vida compl
 ## 5. Reglas Críticas de Arquitectura (INVIOLABLES)
 1. **Header Sticky Unificado**:
    - El membrete superior (Logo, Institución, Subtítulo, Usuario y botón Salir) DEBE residir en un único bloque HTML inyectado con clase `.sticky-header` (`top: 0`).
-   - NUNCA dividir el encabezado en `st.columns` nativos de Streamlit. Las pestañas (`tablist`) deben fijarse a `top: 72px`.
+   - NUNCA dividir el encabezado en `st.columns` nativos de Streamlit. Las pestañas (`tablist`) deben fijarse dinámicamente debajo del header (`top: calc(var(--sticky-header-height, 98px) - 2px)`).
 2. **Desacople Institución vs Categoría**:
    - `instituciones`: Tabla propia en Supabase. NUNCA usar registros dummy 'INIT'.
    - `categoria`: Subpartida/partida opcional dentro de los conceptos.
@@ -60,3 +60,14 @@ Al realizar validaciones completas, el agente debe cubrir el flujo de vida compl
    - Obligatorio usar `normalizar_unidad()` de `./modulos/db_engine.py`.
 5. **Limpieza de Formularios sin Romper Sesión**:
    - Incrementar la clave de versión dinámica (`counter_key += 1`) en `st.session_state` tras un envío exitoso.
+
+---
+
+## 6. Protocolo de Resolución Agéntica de Bugs (Bug Tracker Integrado)
+Cuando el desarrollador indique "resuelve los bugs abiertos", el agente debe:
+1. Consultar `reportes_bugs` donde `estado = 'Abierto'`.
+2. Leer las descripciones, revisar `tabs_afectadas` y descargar las evidencias adjuntas del bucket `bugs`.
+3. Reproducir los fallos y aplicar los parches correspondientes en `app.py` y/o `modulos/`.
+4. Ejecutar pruebas con Playwright para verificar que la solución funcione y no genere regresiones o desestabilice el comportamiento y funcionamiento normal de la aplicación.
+5. Actualizar el registro en `reportes_bugs` pasando el estado a `'Corregido'`, agregando en `notas_resolucion` el resumen técnico del arreglo y actualizando `updated_at`.
+

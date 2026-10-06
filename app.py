@@ -11,12 +11,15 @@ import importlib
 import modulos.db_engine
 import modulos.auth_engine
 import modulos.admin_engine
+import modulos.bug_tracker
 importlib.reload(modulos.db_engine)
 importlib.reload(modulos.auth_engine)
 importlib.reload(modulos.admin_engine)
+importlib.reload(modulos.bug_tracker)
 
 from modulos.auth_engine import render_login_card, render_user_profile_dialog
 from modulos.admin_engine import render_admin_dashboard
+from modulos.bug_tracker import render_bug_report_dialog
 from modulos.db_engine import (
     normalizar_unidad, unidades_list, admite_decimales, get_proyectos, get_biblioteca_instituciones,
     get_biblioteca_conceptos, get_conceptos, get_estimaciones, get_mediciones,
@@ -126,6 +129,10 @@ div[data-testid="stElementContainer"]:has(.sticky-header) {
     background-color: var(--background-color, #ffffff) !important;
 }
 
+div[data-testid="stElementContainer"]:has(.sticky-header) div[data-testid="stMarkdownContainer"] {
+    margin-bottom: 0 !important;
+}
+
 .sticky-header {
     background-color: var(--background-color, #ffffff) !important;
     padding-top: 4px; 
@@ -136,7 +143,7 @@ div[data-testid="stElementContainer"]:has(.sticky-header) {
 /* Las Tabs pegadas exactamente debajo del Header completo */
 div[data-baseweb="tab-list"], div[role="tablist"] {
     position: sticky !important; 
-    top: 72px !important; /* Altura exacta del Header */
+    top: calc(var(--sticky-header-height, 98px) - 2px) !important; /* Altura dinámica del Header con solape anti-ranura */
     z-index: 98 !important;
     background-color: var(--background-color, #ffffff) !important;
     padding-top: 4px !important; 
@@ -211,10 +218,33 @@ button[data-baseweb="tab"], button[data-baseweb="tab"] p, button[data-baseweb="t
     text-decoration: none !important;
 }
 
-/* Ocultar disparadores técnicos del diálogo de perfil y consola admin */
+.bug-link {
+    color: #b91c1c !important;
+    text-decoration: none !important;
+    font-weight: 600;
+    font-size: 0.78rem;
+    background: #fee2e2;
+    padding: 2px 7px;
+    border-radius: 4px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    border: 1px solid #fecaca;
+    transition: all 0.15s ease;
+    cursor: pointer;
+}
+
+.bug-link:hover {
+    background-color: #fecaca !important;
+    color: #991b1b !important;
+    text-decoration: none !important;
+}
+
+/* Ocultar disparadores técnicos del diálogo de perfil, consola admin y reporte de bugs */
 div[data-testid="stElementContainer"]:has(#btn-trigger-mi-perfil-anchor),
 div[data-testid="stElementContainer"]:has(button[key="btn_trigger_mi_perfil"]),
-div[data-testid="stElementContainer"]:has(button[key="btn_trigger_admin_console"]) {
+div[data-testid="stElementContainer"]:has(button[key="btn_trigger_admin_console"]),
+div[data-testid="stElementContainer"]:has(button[key="btn_trigger_reportar_bug"]) {
     display: none !important;
     height: 0 !important;
     margin: 0 !important;
@@ -259,15 +289,22 @@ nom_usr = nom_solo if nom_solo else (st.session_state["user"].email.split("@")[0
 email_usr = st.session_state["user"].email
 empresa_usr = perfil_usr.get("empresa_despacho") or "Independiente"
 
-# Privilegios de Superadministrador (estrictamente booleano)
+# Privilegios de Superadministrador y Rol del Usuario
 if "es_admin" not in st.session_state:
     if perfil_usr and "es_admin" in perfil_usr:
-        st.session_state["es_admin"] = bool(perfil_usr["es_admin"])
+        st.session_state["rol"] = perfil_usr.get("rol", "residente")
+        st.session_state["es_admin"] = bool(perfil_usr.get("es_admin", False)) or (st.session_state["rol"] == "superadmin")
     else:
         try:
-            perf_db = supabase.table("perfiles").select("es_admin").eq("id", user_id).execute()
-            st.session_state["es_admin"] = bool(perf_db.data[0].get("es_admin", False)) if perf_db.data else False
+            perf_db = supabase.table("perfiles").select("es_admin, rol").eq("id", user_id).execute()
+            if perf_db.data:
+                st.session_state["rol"] = perf_db.data[0].get("rol", "residente")
+                st.session_state["es_admin"] = bool(perf_db.data[0].get("es_admin", False)) or (st.session_state["rol"] == "superadmin")
+            else:
+                st.session_state["rol"] = "residente"
+                st.session_state["es_admin"] = False
         except Exception:
+            st.session_state["rol"] = "residente"
             st.session_state["es_admin"] = False
 
 es_admin_usr = bool(st.session_state.get("es_admin", False))
@@ -277,6 +314,8 @@ if "vista_actual" not in st.session_state:
 admin_link_html = ""
 if es_admin_usr:
     admin_link_html = '<div style="margin-top: 4px;"><a href="javascript:void(0)" class="admin-link" title="Consola de Superadministrador">🛡️ Consola Administrador</a></div>'
+
+bug_link_html = '<div style="margin-top: 4px;"><a href="javascript:void(0)" class="bug-link" title="Reportar un problema o sugerencia">🐞 ¿Tienes un problema?</a></div>'
 
 # =============================================================
 # ENCABEZADO UNIFICADO STICKY (UN SOLO CONTENEDOR)
@@ -305,6 +344,7 @@ Control de avance físico y financiero de obra pública y privada
 </div>
 <div style='font-size: 0.8rem; color: #64748b;'>{email_usr}</div>
 {admin_link_html}
+{bug_link_html}
 </div>
 <a href="?logout=1" target="_self" class="btn-salir-link">Salir</a>
 </div>
@@ -323,13 +363,26 @@ if st.button("Alternar Consola Admin", key="btn_trigger_admin_console"):
 if st.button("Abrir Perfil", key="btn_trigger_mi_perfil"):
     st.session_state["mostrar_dialogo_cuenta"] = True
 
+# Disparador en segundo plano para abrir el modal de reporte de bugs
+if st.button("Reportar Problema", key="btn_trigger_reportar_bug"):
+    st.session_state["mostrar_dialogo_bug"] = True
+
 import streamlit.components.v1 as components
 components.html("""
 <script>
 const doc = window.parent.document;
 function hideAndBindTrigger() {
+    // 0. Sincronizar altura exacta del sticky-header con la variable CSS de las pestañas
+    const header = doc.querySelector('.sticky-header');
+    if (header) {
+        const h = Math.ceil(header.getBoundingClientRect().height);
+        if (h > 0) {
+            doc.documentElement.style.setProperty('--sticky-header-height', `${h}px`);
+        }
+    }
+
     // 1. Ocultar los contenedores de los botones técnicos
-    ['Abrir Perfil', 'Alternar Consola Admin'].forEach(txt => {
+    ['Abrir Perfil', 'Alternar Consola Admin', 'Reportar Problema'].forEach(txt => {
         const btn = Array.from(doc.querySelectorAll('button')).find(b => b.innerText.includes(txt));
         if (btn) {
             const container = btn.closest('div[data-testid="stElementContainer"]');
@@ -366,15 +419,35 @@ function hideAndBindTrigger() {
             }
         });
     }
+
+    // 4. Vincular el enlace de reporte de bug en el sticky-header
+    const bugLink = doc.querySelector('.sticky-header .bug-link');
+    if (bugLink && !bugLink.dataset.bound) {
+        bugLink.dataset.bound = "true";
+        bugLink.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const b = Array.from(doc.querySelectorAll('button')).find(btn => btn.innerText.includes('Reportar Problema'));
+            if (b) {
+                b.click();
+            }
+        });
+    }
 }
 hideAndBindTrigger();
 setInterval(hideAndBindTrigger, 200);
 </script>
 """, height=0, width=0)
 
-# Modal de Cuenta / Perfil si fue invocado
+# Modal de Cuenta / Perfil si fue invocado (se consume inmediatamente para evitar que reaparezca en reruns)
 if st.session_state.get("mostrar_dialogo_cuenta"):
+    st.session_state["mostrar_dialogo_cuenta"] = False
     render_user_profile_dialog(supabase, st.session_state["user"], st.session_state.get("perfil", {}))
+
+# Modal de Reporte de Bug si fue invocado (se consume inmediatamente para evitar que reaparezca en reruns)
+if st.session_state.get("mostrar_dialogo_bug"):
+    st.session_state["mostrar_dialogo_bug"] = False
+    render_bug_report_dialog(supabase, st.session_state["user"])
 
 # =============================================================
 # CONMUTACIÓN DE VISTAS: CONSOLA DE ADMINISTRADOR
@@ -646,32 +719,40 @@ with tab_captura:
                 if calc_preview <= 0: st.warning("La cantidad debe ser mayor a 0.")
                 elif not localizacion.strip(): st.warning("Debes indicar la Localización / Elemento.")
                 else:
-                    url_foto, url_croquis = None, None
-                    if foto:
-                        contenido_f, mime_f = optimizar_imagen(foto)
-                        fname_f = f"{uuid.uuid4()}.jpg"
-                        supabase.storage.from_("evidencias").upload(fname_f, contenido_f, {"content-type": mime_f})
-                        url_foto = supabase.storage.from_("evidencias").get_public_url(fname_f)
-                    if croquis:
-                        contenido_c, mime_c = optimizar_imagen(croquis)
-                        fname_c = f"{uuid.uuid4()}.jpg"
-                        supabase.storage.from_("evidencias").upload(fname_c, contenido_c, {"content-type": mime_c})
-                        url_croquis = supabase.storage.from_("evidencias").get_public_url(fname_c)
+                    archivos_subidos_tmp = []
+                    try:
+                        if foto:
+                            contenido_f, mime_f = optimizar_imagen(foto)
+                            fname_f = f"{uuid.uuid4()}.jpg"
+                            supabase.storage.from_("evidencias").upload(fname_f, contenido_f, {"content-type": mime_f})
+                            url_foto = supabase.storage.from_("evidencias").get_public_url(fname_f)
+                            archivos_subidos_tmp.append(fname_f)
+                        if croquis:
+                            contenido_c, mime_c = optimizar_imagen(croquis)
+                            fname_c = f"{uuid.uuid4()}.jpg"
+                            supabase.storage.from_("evidencias").upload(fname_c, contenido_c, {"content-type": mime_c})
+                            url_croquis = supabase.storage.from_("evidencias").get_public_url(fname_c)
+                            archivos_subidos_tmp.append(fname_c)
 
-                    if es_kg: v_an = v_kg
-                    elif es_lt: v_l = v_lt
-                    elif es_h: v_l = v_h
+                        if es_kg: v_an = v_kg
+                        elif es_lt: v_l = v_lt
+                        elif es_h: v_l = v_h
 
-                    supabase.table("mediciones_campo").insert({
-                        "id_estimacion": id_est, "id_concepto": id_conc, "localizacion": localizacion.strip(),
-                        "eje": eje.strip(), "tramo": tramo.strip(), "largo": v_l, "ancho": v_an, "alto": v_al,
-                        "piezas": float(piezas), "cantidad_total": calc_preview, "url_foto": url_foto, "url_croquis": url_croquis
-                    }).execute()
-                    get_mediciones.clear()
-                    st.session_state.cap_counter += 1
-                    st.session_state.dim_counter += 1
-                    st.success("✅ Medición guardada.")
-                    st.rerun()
+                        supabase.table("mediciones_campo").insert({
+                            "id_estimacion": id_est, "id_concepto": id_conc, "localizacion": localizacion.strip(),
+                            "eje": eje.strip(), "tramo": tramo.strip(), "largo": v_l, "ancho": v_an, "alto": v_al,
+                            "piezas": float(piezas), "cantidad_total": calc_preview, "url_foto": url_foto, "url_croquis": url_croquis
+                        }).execute()
+                        get_mediciones.clear()
+                        st.session_state.cap_counter += 1
+                        st.session_state.dim_counter += 1
+                        st.success("✅ Medición guardada.")
+                        st.rerun()
+                    except Exception as ex_ins_med:
+                        if archivos_subidos_tmp:
+                            try: supabase.storage.from_("evidencias").remove(archivos_subidos_tmp)
+                            except: pass
+                        st.error(f"Error al guardar medición: {ex_ins_med}")
 
             st.markdown("### Mediciones registradas en este periodo:")
             st.caption("💡 *Haz doble clic sobre cualquier celda permitida para editar directamente su valor.*")
@@ -801,17 +882,24 @@ with tab_captura:
                                 nom_c = extraer_nombre_archivo(obj_med_borrar["url_croquis"])
                                 if nom_c: archivos_a_borrar.append(nom_c)
 
-                        if archivos_a_borrar:
-                            for chunk in [archivos_a_borrar[i:i+50] for i in range(0, len(archivos_a_borrar), 50)]:
-                                try: supabase.storage.from_("evidencias").remove(chunk)
-                                except: pass
-                        if ids_to_delete:
-                            for chunk in [ids_to_delete[i:i+50] for i in range(0, len(ids_to_delete), 50)]:
-                                supabase.table("mediciones_campo").delete().in_("id", chunk).execute()
-                        get_mediciones.clear()
-                        st.session_state.del_med_counter += 1
-                        st.success(f"{len(ids_to_delete)} mediciones eliminadas.")
-                        st.rerun()
+                        try:
+                            # 1. Eliminar primero de la base de datos para garantizar integridad
+                            if ids_to_delete:
+                                for chunk in [ids_to_delete[i:i+50] for i in range(0, len(ids_to_delete), 50)]:
+                                    supabase.table("mediciones_campo").delete().in_("id", chunk).execute()
+
+                            # 2. Solo tras confirmarse la eliminación en BD, purgar fotos de Storage
+                            if archivos_a_borrar:
+                                for chunk in [archivos_a_borrar[i:i+50] for i in range(0, len(archivos_a_borrar), 50)]:
+                                    try: supabase.storage.from_("evidencias").remove(chunk)
+                                    except: pass
+
+                            get_mediciones.clear()
+                            st.session_state.del_med_counter += 1
+                            st.success(f"{len(ids_to_delete)} mediciones eliminadas.")
+                            st.rerun()
+                        except Exception as ex_del_m:
+                            st.error(f"Error al eliminar mediciones: {ex_del_m}")
 
 # -------------------------------------------------------------
 # TAB 3: ESTIMACIONES
@@ -864,13 +952,39 @@ with tab_estimaciones:
                     est_del_sel = st.selectbox("Seleccionar estimación:", list(dict_est_borrar.keys()), key=f"del_est_sel_{st.session_state.del_est_counter}")
                     st.warning("⚠️ Al eliminar la estimación también se borrarán todas sus mediciones.")
                     if st.button("Eliminar Estimación", type="primary", disabled=not st.checkbox("Confirmo eliminar esta estimación", key=f"chk_del_est_{st.session_state.del_est_counter}")):
-                        supabase.table("estimaciones").delete().eq("id", dict_est_borrar[est_del_sel]).execute()
-                        get_estimaciones.clear()
-                        get_mediciones.clear()
-                        st.session_state.del_est_counter += 1
-                        st.session_state["ed_est_counter"] = st.session_state.get("ed_est_counter", 0) + 1
-                        st.success("Estimación eliminada.")
-                        st.rerun()
+                        id_est_del = dict_est_borrar[est_del_sel]
+                        try:
+                            # 1. Recolectar evidencias de las mediciones asociadas a esta estimación
+                            archivos_ev_est = []
+                            try:
+                                res_meds_est = supabase.table("mediciones_campo").select("url_foto, url_croquis").eq("id_estimacion", id_est_del).execute()
+                                for m_row in (res_meds_est.data or []):
+                                    if m_row.get("url_foto"):
+                                        nf = extraer_nombre_archivo(m_row["url_foto"])
+                                        if nf: archivos_ev_est.append(nf)
+                                    if m_row.get("url_croquis"):
+                                        nc = extraer_nombre_archivo(m_row["url_croquis"])
+                                        if nc: archivos_ev_est.append(nc)
+                            except Exception:
+                                pass
+
+                            # 2. Borrar primero en base de datos (PostgreSQL ejecuta CASCADE en mediciones_campo)
+                            supabase.table("estimaciones").delete().eq("id", id_est_del).execute()
+
+                            # 3. Solo tras éxito en BD, purgar archivos físicos de Storage
+                            if archivos_ev_est:
+                                for chunk_ev in [archivos_ev_est[i:i+50] for i in range(0, len(archivos_ev_est), 50)]:
+                                    try: supabase.storage.from_("evidencias").remove(chunk_ev)
+                                    except: pass
+
+                            get_estimaciones.clear()
+                            get_mediciones.clear()
+                            st.session_state.del_est_counter += 1
+                            st.session_state["ed_est_counter"] = st.session_state.get("ed_est_counter", 0) + 1
+                            st.success("Estimación y mediciones asociadas eliminadas correctamente.")
+                            st.rerun()
+                        except Exception as ex_del_est:
+                            st.error(f"Error al eliminar estimación: {ex_del_est}")
 
         if estimaciones_proyecto:
             st.markdown("##### Listado de Estimaciones:")
@@ -968,7 +1082,15 @@ with tab_estimaciones:
             col_exp_1, col_exp_2, col_exp_3 = st.columns([2, 1, 1])
             
             est_a_descargar = col_exp_1.selectbox("Estimación a Exportar:", [f"Estimación #{e['num_periodo']} (Del {e['periodo_inicio']} al {e['periodo_fin']})" for e in estimaciones_proyecto])
-            formato_institucion = col_exp_2.selectbox("Formato de Salida:", ["IMSS", "Poder Judicial de la Federación", "Formato Estimapp"])
+            
+            # Restricción de plantillas institucionales (IMSS y PJF) exclusivamente para Ingrid
+            email_sesion_norm = (getattr(st.session_state.get("user"), "email", "") or email_usr or "").lower().strip()
+            if email_sesion_norm == "ingrid.gutierrez2904@gmail.com":
+                opciones_formato_excel = ["IMSS", "Poder Judicial de la Federación", "Formato Estimapp"]
+            else:
+                opciones_formato_excel = ["Formato Estimapp"]
+
+            formato_institucion = col_exp_2.selectbox("Formato de Salida:", opciones_formato_excel)
             proy_obj_actual = next((p for p in lista_proyectos if p["id"] == id_proy_est), {})
             
             with col_exp_3:
@@ -1157,14 +1279,40 @@ with tab_catalogo:
             if st.button("Eliminar Seleccionados", type="primary", disabled=len(conc_a_borrar_labels)==0, key=f"btn_del_cat_bulk_{st.session_state.del_conc_counter}"):
                 ids_to_delete = [dict_conc_borrar[label]["id"] for label in conc_a_borrar_labels]
                 if ids_to_delete:
-                    for chunk in [ids_to_delete[i:i+50] for i in range(0, len(ids_to_delete), 50)]:
-                        supabase.table("mediciones_campo").delete().in_("id_concepto", chunk).execute()
-                        supabase.table("catalogo_conceptos").delete().in_("id", chunk).execute()
-                get_conceptos.clear()
-                get_mediciones.clear()
-                st.session_state.del_conc_counter += 1
-                st.success(f"{len(ids_to_delete)} conceptos eliminados.")
-                st.rerun()
+                    try:
+                        # 1. Recolectar evidencias de mediciones vinculadas a estos conceptos
+                        archivos_ev_conc = []
+                        for chunk in [ids_to_delete[i:i+50] for i in range(0, len(ids_to_delete), 50)]:
+                            try:
+                                res_m_c = supabase.table("mediciones_campo").select("url_foto, url_croquis").in_("id_concepto", chunk).execute()
+                                for m_row in (res_m_c.data or []):
+                                    if m_row.get("url_foto"):
+                                        nf = extraer_nombre_archivo(m_row["url_foto"])
+                                        if nf: archivos_ev_conc.append(nf)
+                                    if m_row.get("url_croquis"):
+                                        nc = extraer_nombre_archivo(m_row["url_croquis"])
+                                        if nc: archivos_ev_conc.append(nc)
+                            except Exception:
+                                pass
+
+                        # 2. Borrar en BD (primero mediciones de campo, luego conceptos)
+                        for chunk in [ids_to_delete[i:i+50] for i in range(0, len(ids_to_delete), 50)]:
+                            supabase.table("mediciones_campo").delete().in_("id_concepto", chunk).execute()
+                            supabase.table("catalogo_conceptos").delete().in_("id", chunk).execute()
+
+                        # 3. Solo tras éxito en BD, purgar fotos físicas de Storage
+                        if archivos_ev_conc:
+                            for chunk_ev in [archivos_ev_conc[i:i+50] for i in range(0, len(archivos_ev_conc), 50)]:
+                                try: supabase.storage.from_("evidencias").remove(chunk_ev)
+                                except: pass
+
+                        get_conceptos.clear()
+                        get_mediciones.clear()
+                        st.session_state.del_conc_counter += 1
+                        st.success(f"{len(ids_to_delete)} conceptos y sus mediciones eliminados.")
+                        st.rerun()
+                    except Exception as ex_del_c:
+                        st.error(f"Error al eliminar conceptos: {ex_del_c}")
 
         if conceptos_proyecto:
             st.markdown("##### Presupuesto Oficial del Proyecto (Editor Directo):")
@@ -1557,11 +1705,43 @@ with tab_proyectos:
                 proy_del_sel = st.selectbox("Seleccionar proyecto a borrar:", list(proy_dict_delete.keys()), key=f"del_proy_sel_{st.session_state.del_proy_counter}")
                 st.warning("⚠️ Eliminar un proyecto borrará en cascada todo su catálogo, estimaciones y mediciones.")
                 if st.button("Eliminar Proyecto", type="primary", disabled=not st.checkbox("Confirmo la eliminación definitiva del proyecto", key=f"chk_del_proy_{st.session_state.del_proy_counter}")):
-                    supabase.table("proyectos").delete().eq("id", proy_dict_delete[proy_del_sel]).execute()
-                    get_proyectos.clear()
-                    st.session_state.del_proy_counter += 1
-                    st.success("Proyecto eliminado correctamente.")
-                    st.rerun()
+                    id_proy_del = proy_dict_delete[proy_del_sel]
+                    try:
+                        # 1. Recolectar evidencias de todas las mediciones de este proyecto
+                        archivos_ev_proy = []
+                        try:
+                            res_est_p = supabase.table("estimaciones").select("id").eq("id_proyecto", id_proy_del).execute()
+                            est_ids = [e["id"] for e in (res_est_p.data or [])]
+                            if est_ids:
+                                res_m_p = supabase.table("mediciones_campo").select("url_foto, url_croquis").in_("id_estimacion", est_ids).execute()
+                                for m_row in (res_m_p.data or []):
+                                    if m_row.get("url_foto"):
+                                        nf = extraer_nombre_archivo(m_row["url_foto"])
+                                        if nf: archivos_ev_proy.append(nf)
+                                    if m_row.get("url_croquis"):
+                                        nc = extraer_nombre_archivo(m_row["url_croquis"])
+                                        if nc: archivos_ev_proy.append(nc)
+                        except Exception:
+                            pass
+
+                        # 2. Borrar primero en BD (Postgres ejecuta CASCADE en catalogo, estimaciones y mediciones)
+                        supabase.table("proyectos").delete().eq("id", id_proy_del).execute()
+
+                        # 3. Solo tras éxito en BD, purgar evidencias de Storage
+                        if archivos_ev_proy:
+                            for chunk_ev in [archivos_ev_proy[i:i+50] for i in range(0, len(archivos_ev_proy), 50)]:
+                                try: supabase.storage.from_("evidencias").remove(chunk_ev)
+                                except: pass
+
+                        get_proyectos.clear()
+                        get_conceptos.clear()
+                        get_estimaciones.clear()
+                        get_mediciones.clear()
+                        st.session_state.del_proy_counter += 1
+                        st.success("Proyecto y todos sus datos vinculados eliminados correctamente.")
+                        st.rerun()
+                    except Exception as ex_del_p:
+                        st.error(f"Error al eliminar proyecto: {ex_del_p}")
 
     if lista_proyectos:
         st.markdown("##### Proyectos Registrados:")

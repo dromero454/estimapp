@@ -70,11 +70,15 @@ El sistema opera sobre el esquema `public` con las siguientes tablas:
    - Volumetrías y generadores capturados en sitio con soporte geométrico y fotográfico.
    - Columnas: `id` (BIGINT PK), `id_estimacion` (FK a estimaciones), `id_concepto` (FK a catalogo_conceptos), `localizacion` (TEXT), `eje` (TEXT), `tramo` (TEXT), `largo` (NUMERIC), `ancho` (NUMERIC), `alto` (NUMERIC), `piezas` (NUMERIC), `cantidad_total` (NUMERIC), `url_foto` (TEXT), `url_croquis` (TEXT).
 7. **`perfiles`**:
-   - Datos ampliados de usuario (`nombre`, `empresa_despacho`) asociados al identificador único de autenticación (`auth.uid()`).
+   - Datos ampliados de usuario (`nombre`, `empresa_despacho`, `rol`, `es_admin`) asociados al identificador único de autenticación (`auth.uid()`).
+8. **`reportes_bugs`**:
+   - Sistema de reporte y gestión de incidencias técnicas (Bug Tracker).
+   - Columnas: `id` (UUID PK), `folio` (TEXT UNIQUE correlativo 'BUG-XXX'), `user_id` (UUID FK a auth.users), `tabs_afectadas` (TEXT[]), `categoria` (TEXT), `descripcion` (TEXT), `archivos_adjuntos` (TEXT[] rutas en bucket 'bugs'), `estado` (TEXT: 'Abierto', 'En Revisión', 'Corregido', 'Validado'), `notas_resolucion` (TEXT), `created_at` (TIMESTAMPTZ), `updated_at` (TIMESTAMPTZ).
 
 ### 3.3 Almacenamiento (Supabase Storage)
 - **Bucket `evidencias`**: Almacena fotos de campo y croquis técnicos subidos desde la pestaña de captura. Las imágenes deben optimizarse con Pillow antes de ser cargadas (máx. 1280px / 80% calidad JPEG).
 - **Bucket `plantillas`**: Almacena en la nube las plantillas maestras `.xlsx` para descarga e inyección dinámica.
+- **Bucket `bugs`**: Almacena archivos adjuntos y evidencias gráficas/documentales subidas en los reportes de bugs bajo la ruta `{folio}/{nombre_archivo}`.
 
 ---
 
@@ -83,6 +87,9 @@ El sistema opera sobre el esquema `public` con las siguientes tablas:
 - **`modulos/auth_engine.py`**:
   - Renderiza el flujo visual de autenticación y registro con diseño de tarjetas.
   - Gestiona la sesión de Supabase Auth y crea perfiles por defecto.
+- **`modulos/bug_tracker.py`**:
+  - Renderiza el diálogo modal `@st.dialog` para reporte de fallas y captura de evidencias múltiples.
+  - Sube archivos al bucket `bugs` y persiste tickets en `reportes_bugs`.
 - **`modulos/db_engine.py`**:
   - Funciones de consulta a la base de datos decoradas con `@st.cache_data`.
   - Normalizador de unidades métricas (`normalizar_unidad`) para unificar simbologías (`m²`, `m³`, `kg`, `litros`, `m³/km`, etc.).
