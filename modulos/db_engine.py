@@ -107,9 +107,15 @@ def get_mediciones(id_estimacion: int):
 def generar_plantilla_excel(tipo="biblioteca"):
     output = io.BytesIO()
     if tipo == "biblioteca":
-        cols = ["Especialidad (Opcional)", "Categoria (Opcional)", "Clave", "Descripcion", "Unidad", "Precio_Unitario"]
+        cols = [
+            "Especialidad (Opcional)", "Categoria (Opcional)", "Clave", "Descripcion", "Unidad",
+            "Precio_Unitario", "Costo_Material (Opcional)", "Costo_MdeO (Opcional)", "Costo_Herr (Opcional)", "Costo_Ind (Opcional)"
+        ]
     else:
-        cols = ["Especialidad (Opcional)", "Categoria (Opcional)", "Clave", "Descripcion", "Unidad", "Cantidad_Contratada", "Precio_Unitario"]
+        cols = [
+            "Especialidad (Opcional)", "Categoria (Opcional)", "Clave", "Descripcion", "Unidad",
+            "Cantidad_Contratada", "Precio_Unitario", "Costo_Material (Opcional)", "Costo_MdeO (Opcional)", "Costo_Herr (Opcional)", "Costo_Ind (Opcional)", "%_Utilidad (Opcional)"
+        ]
         
     df = pd.DataFrame(columns=cols)
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -124,10 +130,11 @@ def _limpiar_texto_header(txt) -> str:
     s = re.sub(r"[^a-z0-9\s]", " ", s)
     return " ".join(s.split())
 
-def procesar_excel_importacion(df: pd.DataFrame, tipo="proyecto"):
+def procesar_excel_importacion(df: pd.DataFrame, tipo="proyecto", pct_utilidad_default=15.0):
     """
     Parsea e interpreta de forma tolerante y robusta un DataFrame importado desde Excel,
-    admitiendo variaciones en nombres de columnas (con o sin '(Opcional)', acentos, espacios o guiones bajos).
+    admitiendo variaciones en nombres de columnas (con o sin '(Opcional)', acentos, espacios o guiones bajos),
+    y dando soporte Dual Path tanto a formatos clásicos v1.0 como extendidos v2.0 (APU + Utilidad).
     """
     cols_map = {_limpiar_texto_header(c): c for c in df.columns}
     
@@ -145,13 +152,22 @@ def procesar_excel_importacion(df: pd.DataFrame, tipo="proyecto"):
     c_cant = buscar_col(["cantidad contratada", "cantidad", "cant contratada", "cant", "volumen contratado", "volumen"]) if tipo == "proyecto" else None
     c_esp = buscar_col(["especialidad", "subpartida"])
     c_cat = buscar_col(["categoria", "partida"])
+    
+    # Columnas analíticas opcionales v2.0
+    c_mat = buscar_col(["costo material", "costo mat", "material", "costo de material", "mat"])
+    c_mo = buscar_col(["costo mdeo", "costo mano de obra", "mano de obra", "costo mo", "mdeo", "mo"])
+    c_herr = buscar_col(["costo herr", "costo herramienta", "costo equipo", "herramienta", "herr", "equipo"])
+    c_ind = buscar_col(["costo ind", "costo indirecto", "costo indirectos", "indirecto", "indirectos", "ind"])
+    c_util = buscar_col(["utilidad", "porcentaje utilidad", "pct utilidad", "porc utilidad", "utilidad pct"]) if tipo == "proyecto" else None
 
     faltantes = []
     if not c_clave: faltantes.append("Clave")
     if not c_desc: faltantes.append("Descripción")
     if not c_unidad: faltantes.append("Unidad")
-    if not c_pu: faltantes.append("Precio Unitario")
-    if tipo == "proyecto" and not c_cant: faltantes.append("Cantidad Contratada")
+    if not c_pu and not (c_mat or c_mo or c_herr or c_ind):
+        faltantes.append("Precio Unitario")
+    if tipo == "proyecto" and not c_cant:
+        faltantes.append("Cantidad Contratada")
 
     if faltantes:
         return False, f"Columnas obligatorias faltantes en el Excel: {', '.join(faltantes)}", []
@@ -164,24 +180,55 @@ def procesar_excel_importacion(df: pd.DataFrame, tipo="proyecto"):
             continue
         
         u = normalizar_unidad(str(row[c_unidad])) if c_unidad else "s/u"
-        pu = round(float(pd.to_numeric(row[c_pu], errors="coerce") or 0.0), 2) if c_pu else 0.0
+        pu_raw = float(pd.to_numeric(row[c_pu], errors="coerce") or 0.0) if c_pu and not pd.isna(row[c_pu]) else 0.0
+        pu = round(max(0.0, pu_raw), 2)
         esp = str(row[c_esp]).strip() if c_esp and not pd.isna(row[c_esp]) else ""
         cat = str(row[c_cat]).strip() if c_cat and not pd.isna(row[c_cat]) else ""
+        
+        val_mat = round(max(0.0, float(pd.to_numeric(row[c_mat], errors="coerce") or 0.0)), 2) if c_mat and not pd.isna(row[c_mat]) else 0.0
+        val_mo = round(max(0.0, float(pd.to_numeric(row[c_mo], errors="coerce") or 0.0)), 2) if c_mo and not pd.isna(row[c_mo]) else 0.0
+        val_herr = round(max(0.0, float(pd.to_numeric(row[c_herr], errors="coerce") or 0.0)), 2) if c_herr and not pd.isna(row[c_herr]) else 0.0
+        val_ind = round(max(0.0, float(pd.to_numeric(row[c_ind], errors="coerce") or 0.0)), 2) if c_ind and not pd.isna(row[c_ind]) else 0.0
+        suma_analitica = round(val_mat + val_mo + val_herr + val_ind, 2)
         
         rec = {
             "especialidad": esp,
             "categoria": cat,
             "clave": clave,
             "descripcion": desc,
-            "unidad": u
+            "unidad": u,
+            "costo_material": val_mat,
+            "costo_mano_obra": val_mo,
+            "costo_herramienta": val_herr,
+            "costo_indirecto": val_ind
         }
+        
         if tipo == "proyecto":
             cant_raw = float(pd.to_numeric(row[c_cant], errors="coerce") or 0.0) if c_cant else 0.0
             cant = round(cant_raw) if not admite_decimales(u) else round(cant_raw, 2)
             rec["cantidad_contratada"] = cant
-            rec["precio_unitario"] = pu
+            
+            # Utilidad por concepto (hereda la del proyecto si no se especifica)
+            if c_util and not pd.isna(row[c_util]):
+                util_raw = pd.to_numeric(row[c_util], errors="coerce")
+                rec["porcentaje_utilidad"] = round(max(0.0, float(util_raw)), 2) if not pd.isna(util_raw) else float(pct_utilidad_default)
+            else:
+                rec["porcentaje_utilidad"] = round(float(pct_utilidad_default), 2)
+                
+            # Precio unitario resultante
+            if suma_analitica > 0:
+                if pu == 0.0:
+                    rec["precio_unitario"] = round(suma_analitica * (1.0 + rec["porcentaje_utilidad"] / 100.0), 2)
+                else:
+                    rec["precio_unitario"] = pu
+            else:
+                rec["precio_unitario"] = pu
         else:
-            rec["precio_referencial"] = pu
+            # En biblioteca no se almacena porcentaje ni monto de utilidad
+            if suma_analitica > 0 and pu == 0.0:
+                rec["precio_referencial"] = suma_analitica
+            else:
+                rec["precio_referencial"] = pu
             
         records.append(rec)
         

@@ -133,9 +133,9 @@ Permitir el ingreso de conceptos tanto a precio unitario cerrado como desglosado
    * **Importador Excel:** Actualizar la plantilla descargable con columnas opcionales (`Costo Material`, `Costo MdeO`, `Costo Herr`, `Costo Ind`, `% Utilidad`). Si vienen vacías, el importador asigna el P.U. tradicional sin romper el catálogo.
 
 #### Definition of Done (DoD)
-- [ ] Conceptos con precio cerrado se guardan y leen correctamente (compatibilidad v1.0).
-- [ ] Conceptos analíticos calculan reactivamente el precio unitario y persisten el desglose.
-- [ ] Importación y exportación de plantillas Excel funcionando en ambos modos.
+- [x] Conceptos con precio cerrado se guardan y leen correctamente (compatibilidad v1.0).
+- [x] Conceptos analíticos calculan reactivamente el precio unitario y persisten el desglose.
+- [x] Importación y exportación de plantillas Excel funcionando en ambos modos.
 
 ---
 

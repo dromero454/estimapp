@@ -50,15 +50,15 @@ Este documento define el protocolo de control de calidad y pruebas automatizadas
 ---
 
 ### Bloque C: Catálogo y Biblioteca - Dual Path (Etapa 3 - Tab 4 y Tab 5)
-- [ ] **C.1 Tab 5 - Biblioteca Maestra (`modulos/biblioteca_engine.py`):**
-  - [ ] Alta con Precio Unitario Cerrado (Camino 1): Concepto estándar sin desglose.
-  - [ ] Alta con Desglose Analítico (Camino 2): Ingresar Material ($120), MdeO ($80), Herramienta ($10), Indirectos ($15). Verificar que calcula P.U. Referencial ($225).
-- [ ] **C.2 Tab 4 - Catálogo del Proyecto (`modulos/catalogo_engine.py`):**
-  - [ ] Alta con factor de utilidad: Comprobar que hereda el `% Utilidad` del proyecto pero permite sobreescribirlo por partida.
-  - [ ] **Importador Excel:**
-    - [ ] Subir archivo Excel tradicional v1.0 (solo columnas de clave, descripción, unidad, cantidad, precio). Comprobar que importa perfectamente.
-    - [ ] Subir archivo Excel v2.0 (con columnas adicionales de desglose). Comprobar que lee los costos desglosados y la utilidad.
-  - [ ] **Normalización de Unidades:** Comprobar que entradas como `M2`, `m2`, `M²` se normalizan a `m²` vía `normalizar_unidad()`.
+- [x] **C.1 Tab 5 - Biblioteca Maestra (`modulos/biblioteca_engine.py`):**
+  - [x] Alta con Precio Unitario Cerrado (Camino 1): Concepto estándar sin desglose.
+  - [x] Alta con Desglose Analítico (Camino 2): Ingresar Material ($120), MdeO ($80), Herramienta ($10), Indirectos ($15). Verificar que calcula P.U. Referencial ($225).
+- [x] **C.2 Tab 4 - Catálogo del Proyecto (`modulos/catalogo_engine.py`):**
+  - [x] Alta con factor de utilidad: Comprobar que hereda el `% Utilidad` del proyecto pero permite sobreescribirlo por partida.
+  - [x] **Importador Excel:**
+    - [x] Subir archivo Excel tradicional v1.0 (solo columnas de clave, descripción, unidad, cantidad, precio). Comprobar que importa perfectamente.
+    - [x] Subir archivo Excel v2.0 (con columnas adicionales de desglose). Comprobar que lee los costos desglosados y la utilidad.
+  - [x] **Normalización de Unidades:** Comprobar que entradas como `M2`, `m2`, `M²` se normalizan a `m²` vía `normalizar_unidad()`.
 
 ---
 
