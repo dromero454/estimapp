@@ -12,10 +12,12 @@ import modulos.db_engine
 import modulos.auth_engine
 import modulos.admin_engine
 import modulos.bug_tracker
+import modulos.pdf_engine
 importlib.reload(modulos.db_engine)
 importlib.reload(modulos.auth_engine)
 importlib.reload(modulos.admin_engine)
 importlib.reload(modulos.bug_tracker)
+importlib.reload(modulos.pdf_engine)
 
 from modulos.auth_engine import render_login_card, render_user_profile_dialog
 from modulos.admin_engine import render_admin_dashboard

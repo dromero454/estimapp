@@ -199,6 +199,11 @@ def render_admin_dashboard(supabase: Client):
                 "instituciones": "Dependencias e instituciones dadas de alta",
                 "perfiles": "Perfiles y metadatos de residentes y administradores",
                 "reportes_bugs": "Tickets de soporte, reportes de incidencias y bitácora de parches",
+                "proveedores": "Directorio de proveedores y casas de materiales",
+                "personal_obra": "Directorio de cuadrillas, maestros y destajistas",
+                "insumos_concepto": "Desglose fino de insumos y composición APU",
+                "hitos_cobro": "Hitos financieros y cobro comercial de proyectos",
+                "telemetria_clima": "Telemetría meteorológica histórica de periodos (Open-Meteo)",
             }
 
             rows_conteos = []
@@ -235,13 +240,18 @@ def render_admin_dashboard(supabase: Client):
 
                 tablas_disponibles = [
                     "reportes_bugs",
+                    "telemetria_clima",
                     "mediciones_campo",
+                    "insumos_concepto",
+                    "hitos_cobro",
                     "estimaciones",
                     "catalogo_conceptos",
                     "proyectos",
+                    "personal_obra",
+                    "proveedores",
                     "biblioteca_conceptos",
                     "instituciones",
-                    "perfiles"
+                    "perfiles",
                 ]
 
                 col_chk_all, _ = st.columns([2, 1])

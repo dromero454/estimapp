@@ -57,30 +57,33 @@ def generar_pdf_resumen_ejecutivo(proy_info, monto_cont, monto_est, saldo_ejerce
     story.append(Paragraph("ESTIMAPP | INFORME EJECUTIVO DE CONTROL PRESUPUESTAL", title_style))
     story.append(Paragraph(f"Fecha de corte y emisión: {datetime.datetime.now().strftime('%d/%m/%Y %H:%M')} | Sistema Central de Estimaciones", subtitle_style))
 
+    desc_sintetica = proy_info.get('descripcion_sintetica') or 'General'
+    desc_sintetica_corta = f"{desc_sintetica[:50]}..." if len(desc_sintetica) > 50 else desc_sintetica
+
     info_data = [
         [
             Paragraph("<b>Obra:</b>", table_text),
-            Paragraph(f"{proy_info.get('nombre_obra', 'N/D')}", table_text),
+            Paragraph(f"{proy_info.get('nombre_obra') or 'N/D'}", table_text),
             Paragraph("<b>Contrato N°:</b>", table_text),
-            Paragraph(f"{proy_info.get('contrato_no', 'S/N')}", table_text)
+            Paragraph(f"{proy_info.get('contrato_no') or 'S/N'}", table_text)
         ],
         [
             Paragraph("<b>Ubicación:</b>", table_text),
-            Paragraph(f"{proy_info.get('ubicacion', 'N/D')}", table_text),
+            Paragraph(f"{proy_info.get('ubicacion') or 'N/D'}", table_text),
             Paragraph("<b>Licitación:</b>", table_text),
-            Paragraph(f"{proy_info.get('concurso_no', 'S/N')}", table_text)
+            Paragraph(f"{proy_info.get('concurso_no') or 'S/N'}", table_text)
         ],
         [
             Paragraph("<b>Contratista:</b>", table_text),
-            Paragraph(f"{proy_info.get('contratista', 'N/D')}", table_text),
+            Paragraph(f"{proy_info.get('contratista') or 'N/D'}", table_text),
             Paragraph("<b>Unidad:</b>", table_text),
-            Paragraph(f"{proy_info.get('unidad', 'N/D')}", table_text)
+            Paragraph(f"{proy_info.get('unidad') or 'N/D'}", table_text)
         ],
         [
             Paragraph("<b>Residente:</b>", table_text),
-            Paragraph(f"{proy_info.get('residente_obra', 'N/D')}", table_text),
+            Paragraph(f"{proy_info.get('residente_obra') or 'N/D'}", table_text),
             Paragraph("<b>Alcance:</b>", table_text),
-            Paragraph(f"{proy_info.get('descripcion_sintetica', 'General')[:50]}...", table_text)
+            Paragraph(f"{desc_sintetica_corta}", table_text)
         ]
     ]
     t_info = Table(info_data, colWidths=[65, 230, 75, 170])
