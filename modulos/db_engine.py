@@ -100,7 +100,7 @@ def get_estimaciones(id_proyecto: int):
 def get_mediciones(id_estimacion: int):
     supabase = st.session_state["supabase_client"]
     res = supabase.table("mediciones_campo").select(
-        "id, localizacion, eje, tramo, largo, ancho, alto, piezas, cantidad_total, url_foto, url_croquis, id_concepto, catalogo_conceptos(clave, unidad, precio_unitario)"
+        "id, localizacion, eje, tramo, largo, ancho, alto, piezas, cantidad_total, url_foto, url_croquis, id_concepto, id_personal, horas_o_jornales, catalogo_conceptos(clave, unidad, precio_unitario), personal_obra(nombre, especialidad, costo_jornal_base)"
     ).eq("id_estimacion", id_estimacion).order("id").execute()
     return res.data or []
 

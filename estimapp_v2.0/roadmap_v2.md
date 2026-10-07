@@ -109,9 +109,9 @@ Implementar las pestañas satélite de gestión transversal (`Personal` y `Prove
    * Declarar formalmente las 8 pestañas en `st.tabs()` y llamar a sus respectivos motores.
 
 #### Definition of Done (DoD)
-- [ ] Alta, edición y lectura de trabajadores y proveedores funcionando.
-- [ ] Búsqueda geográfica en Nominatim resuelve coordenadas y desglosa municipio/estado sin bloquear la app si la red falla.
-- [ ] Proyectos nuevos guardan modalidad y factores globales.
+- [x] Alta, edición y lectura de trabajadores y proveedores funcionando.
+- [x] Búsqueda geográfica en Nominatim resuelve coordenadas y desglosa municipio/estado sin bloquear la app si la red falla.
+- [x] Proyectos nuevos guardan modalidad y factores globales.
 
 ---
 
@@ -166,7 +166,7 @@ Vincular el avance de campo con la nómina de destajistas, habilitar cortes temp
      * `mixta`: Mostrar dos columnas: Bloque Contractual Oficial y Bloque Operativo de Rentabilidad Interna.
 
 #### Definition of Done (DoD)
-- [ ] Mediciones en campo se asocian opcionalmente a un destajista sin romper el flujo estándar.
-- [ ] La pestaña 3 liquida la raya semanal por trabajador en periodos con duración de días libre.
-- [ ] Telemetría climática almacena datos cuando hay coordenadas disponibles sin generar fallos si el servicio está inaccesible.
-- [ ] Dashboard financiero refleja métricas coherentes según la modalidad del proyecto.
+- [x] Mediciones en campo se asocian opcionalmente a un destajista sin romper el flujo estándar.
+- [x] La pestaña 3 liquida la raya semanal por trabajador en periodos con duración de días libre.
+- [x] Telemetría climática almacena datos cuando hay coordenadas disponibles sin generar fallos si el servicio está inaccesible.
+- [x] Dashboard financiero refleja métricas coherentes según la modalidad del proyecto.

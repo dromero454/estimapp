@@ -63,36 +63,36 @@ Este documento define el protocolo de control de calidad y pruebas automatizadas
 ---
 
 ### Bloque D: Destajos, Periodos Libres y Dashboard (Etapa 4 - Tab 2, Tab 3 y Tab 1)
-- [ ] **D.1 Tab 2 - Captura en Campo (`modulos/mediciones_engine.py`):**
-  - [ ] Captura de generador geométrico sin destajista (Opción: *"Sin asignar"*). Comprobar compatibilidad con v1.0.
-  - [ ] Captura asignando a `TEST_JUAN_ALBANIL` con `1.5 jornales`. Comprobar almacenamiento en `mediciones_campo`.
-- [ ] **D.2 Tab 3 - Estimaciones y Raya (`modulos/estimaciones_engine.py`):**
-  - [ ] **Periodo Libre (N días):** Abrir estimación con fecha de inicio lunes y fin jueves (4 días). Verificar que no fuerza semanas fijas.
-  - [ ] **Resumen de Liquidación de Raya:**
-    - [ ] Verificar que agrupa las mediciones asignadas a `TEST_JUAN_ALBANIL` dentro de las fechas del corte.
-    - [ ] Comprobar el cálculo de importe a pagar (`Jornales × Costo Base`).
-    - [ ] Verificar la generación o vista previa del recibo de raya.
-  - [ ] **Telemetría Climática Silenciosa (Open-Meteo):**
-    - [ ] Al guardar la estimación en un proyecto georreferenciado, verificar inserción en `public.telemetria_clima`.
-    - [ ] **Edge case:** Guardar estimación en proyecto sin coordenadas. Comprobar que no lanza excepciones ni interrumpe el flujo.
-- [ ] **D.3 Tab 1 - Resumen Financiero Adaptativo (`modulos/dashboard_engine.py`):**
-  - [ ] Cambiar a un proyecto `publica`: Verifica que se visualizan tarjetas contractuales de avance oficial.
-  - [ ] Cambiar a un proyecto `privada`: Verifica que se visualizan tarjetas de costo erogado real, margen bruto y gráfica de distribución.
-  - [ ] Cambiar a un proyecto `mixta`: Verifica la coexistencia de ambos bloques en columnas paralelas.
+- [x] **D.1 Tab 2 - Captura en Campo (`modulos/mediciones_engine.py`):**
+  - [x] Captura de generador geométrico sin destajista (Opción: *"Sin asignar"*). Comprobar compatibilidad con v1.0.
+  - [x] Captura asignando a `TEST_JUAN_ALBANIL` con `1.5 jornales`. Comprobar almacenamiento en `mediciones_campo`.
+- [x] **D.2 Tab 3 - Estimaciones y Raya (`modulos/estimaciones_engine.py`):**
+  - [x] **Periodo Libre (N días):** Abrir estimación con fecha de inicio lunes y fin jueves (4 días). Verificar que no fuerza semanas fijas.
+  - [x] **Resumen de Liquidación de Raya:**
+    - [x] Verificar que agrupa las mediciones asignadas a `TEST_JUAN_ALBANIL` dentro de las fechas del corte.
+    - [x] Comprobar el cálculo de importe a pagar (`Jornales × Costo Base`).
+    - [x] Verificar la generación o vista previa del recibo de raya.
+  - [x] **Telemetría Climática Silenciosa (Open-Meteo):**
+    - [x] Al guardar la estimación en un proyecto georreferenciado, verificar inserción en `public.telemetria_clima`.
+    - [x] **Edge case:** Guardar estimación en proyecto sin coordenadas. Comprobar que no lanza excepciones ni interrumpe el flujo.
+- [x] **D.3 Tab 1 - Resumen Financiero Adaptativo (`modulos/dashboard_engine.py`):**
+  - [x] Cambiar a un proyecto `publica`: Verifica que se visualizan tarjetas contractuales de avance oficial.
+  - [x] Cambiar a un proyecto `privada`: Verifica que se visualizan tarjetas de costo erogado real, margen bruto y gráfica de distribución.
+  - [x] Cambiar a un proyecto `mixta`: Verifica la coexistencia de ambos bloques en columnas paralelas.
 
 ---
 
 ### Bloque E: Integridad de Borrado y Purga (Tear Down)
-- [ ] **E.1 Borrado Defensivo de Personal (`SET NULL`):**
-  - [ ] Eliminar al trabajador `TEST_JUAN_ALBANIL`.
-  - [ ] Inspeccionar `public.mediciones_campo`: La medición generada previamente debe conservar su `cantidad_total`, `largo`, `ancho` e historial, con `id_personal = NULL`.
-- [ ] **E.2 Borrado en Cascada de Proyecto (`CASCADE`):**
-  - [ ] Eliminar `TEST_PROYECTO_PRIVADO`.
-  - [ ] Verificar que sus conceptos, estimaciones, mediciones, hitos y telemetría se borraron automáticamente.
-  - [ ] Verificar que `TEST_FERRETERA_CENTRAL` (proveedor) sigue existiendo intacto en la base de datos.
-- [ ] **E.3 Consola de Purga Segura:**
-  - [ ] Probar la opción de vaciado seguro en `admin_engine.py` escribiendo un texto diferente a `"CONFIRMAR"` (debe abortar la acción).
-  - [ ] Escribir `"CONFIRMAR"` y comprobar que ejecuta la purga de registros de prueba sin romper la sesión.
+- [x] **E.1 Borrado Defensivo de Personal (`SET NULL`):**
+  - [x] Eliminar al trabajador `TEST_JUAN_ALBANIL`.
+  - [x] Inspeccionar `public.mediciones_campo`: La medición generada previamente debe conservar su `cantidad_total`, `largo`, `ancho` e historial, con `id_personal = NULL`.
+- [x] **E.2 Borrado en Cascada de Proyecto (`CASCADE`):**
+  - [x] Eliminar `TEST_PROYECTO_PRIVADO`.
+  - [x] Verificar que sus conceptos, estimaciones, mediciones, hitos y telemetría se borraron automáticamente.
+  - [x] Verificar que `TEST_FERRETERA_CENTRAL` (proveedor) sigue existiendo intacto en la base de datos.
+- [x] **E.3 Consola de Purga Segura:**
+  - [x] Probar la opción de vaciado seguro en `admin_engine.py` escribiendo un texto diferente a `"CONFIRMAR"` (debe abortar la acción).
+  - [x] Escribir `"CONFIRMAR"` y comprobar que ejecuta la purga de registros de prueba sin romper la sesión.
 
 ---
 
