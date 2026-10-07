@@ -33,19 +33,19 @@ Este documento define el protocolo de control de calidad y pruebas automatizadas
 ---
 
 ### Bloque B: Directorios y Proyectos (Etapa 2 - Tab 6, Tab 7 y Tab 8)
-- [ ] **B.1 Tab 6 - Personal y Cuadrillas (`modulos/personal_engine.py`):**
-  - [ ] Alta de trabajador: `TEST_JUAN_ALBANIL`, especialidad `Albañilería`, jornal base `$550.00`.
-  - [ ] Edición interactiva: Modificar tarifa directamente en celda de `st.data_editor` y comprobar persistencia.
-  - [ ] Verificación de limpieza: El formulario se limpia tras el registro exitoso mediante `counter_key += 1`.
-- [ ] **B.2 Tab 7 - Proveedores (`modulos/proveedores_engine.py`):**
-  - [ ] Alta de proveedor: `TEST_FERRETERA_CENTRAL`, giro `Materiales`, teléfono `3120000000`.
-  - [ ] Búsqueda y filtrado: El buscador filtra registros correctamente sin recargas anómalas de la página.
-- [ ] **B.3 Tab 8 - Proyectos y Georreferenciación (`modulos/proyectos_engine.py`):**
-  - [ ] Crear proyecto con modalidad `privada`, `% Indirectos = 12%`, `% Utilidad = 18%`.
-  - [ ] **Prueba de Geocodificación Nominatim:**
-    - [ ] Introducir dirección en campo de búsqueda y hacer clic en `st.button("🔍 Buscar Dirección")`.
-    - [ ] Verificar que `latitud`, `longitud`, `estado` y `municipio` se autocompletan.
-    - [ ] **Edge case / Fallback:** Simular fallo de red o dirección inválida; comprobar que la app muestra advertencia suave (`st.warning`) y permite guardar el proyecto sin coordenadas.
+- [x] **B.1 Tab 6 - Personal y Cuadrillas (`modulos/personal_engine.py`):**
+  - [x] Alta de trabajador: `TEST_JUAN_ALBANIL`, especialidad `Albañilería`, jornal base `$550.00`.
+  - [x] Edición interactiva: Modificar tarifa directamente en celda de `st.data_editor` y comprobar persistencia.
+  - [x] Verificación de limpieza: El formulario se limpia tras el registro exitoso mediante `counter_key += 1`.
+- [x] **B.2 Tab 7 - Proveedores (`modulos/proveedores_engine.py`):**
+  - [x] Alta de proveedor: `TEST_FERRETERA_CENTRAL`, giro `Materiales`, teléfono `3120000000`.
+  - [x] Búsqueda y filtrado: El buscador filtra registros correctamente sin recargas anómalas de la página.
+- [x] **B.3 Tab 8 - Proyectos y Georreferenciación (`modulos/proyectos_engine.py`):**
+  - [x] Crear proyecto con modalidad `privada`, `% Indirectos = 12%`, `% Utilidad = 18%`.
+  - [x] **Prueba de Geocodificación Nominatim:**
+    - [x] Introducir dirección en campo de búsqueda y hacer clic en `st.button("🔍 Buscar Dirección")`.
+    - [x] Verificar que `latitud`, `longitud`, `estado` y `municipio` se autocompletan.
+    - [x] **Edge case / Fallback:** Simular fallo de red o dirección inválida; comprobar que la app muestra advertencia suave (`st.warning`) y permite guardar el proyecto sin coordenadas.
 
 ---
 

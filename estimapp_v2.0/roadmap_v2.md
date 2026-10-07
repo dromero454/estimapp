@@ -1,6 +1,6 @@
 # ESTIMAPP v2.0 - Plan Técnico de Migración y Roadmap de Implementación
 
-Este documento contiene la hoja de ruta exhaustiva y secuencial para que un agente autónomo (basado en **Gemini Flash 3.8 en Antigravity**) actualice la plataforma de la versión **1.0** a la versión **2.0** sin regresiones, preservando la compatibilidad con obras públicas y adoptando las capacidades de obra privada, mixta, destajos, APU y telemetría climática.
+Este documento contiene la hoja de ruta exhaustiva y secuencial para que un agente autónomo (basado en **Gemini Flash 3.8 en Antigravity**) actualice la plataforma de la versión **1.0** a la versión **2.0** sin regresiones, preservando la compatibilidad con obras públicas y adoptando las capacidades de obra privada, mixta, destajos, APU y telemetría climática. Considerando la versión 1.0 como la del último commit realizado en la branch development del proyecto.
 
 ---
 
@@ -45,7 +45,7 @@ estimapp/
     ├── proyectos_engine.py     # Modalidades, factores globales y Nominatim OSM (Tab 8)
     └── proveedores_engine.py   # [NUEVO] CRUD de Proveedores Comerciales (Tab 7)
 ```
-
+Puede que haya módulos y carpetas que no se enlisten anteriormente presentes en la versión actual (1.0) pero no deben eliminarse, el diagrama de arriba debe entenderse de manera ilustrativa y no de manera literal exacta.
 ---
 
 ## 3. Hoja de Ruta por Etapas (Roadmap Secuencial)

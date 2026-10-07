@@ -13,15 +13,24 @@ import modulos.auth_engine
 import modulos.admin_engine
 import modulos.bug_tracker
 import modulos.pdf_engine
+import modulos.personal_engine
+import modulos.proveedores_engine
+import modulos.proyectos_engine
 importlib.reload(modulos.db_engine)
 importlib.reload(modulos.auth_engine)
 importlib.reload(modulos.admin_engine)
 importlib.reload(modulos.bug_tracker)
 importlib.reload(modulos.pdf_engine)
+importlib.reload(modulos.personal_engine)
+importlib.reload(modulos.proveedores_engine)
+importlib.reload(modulos.proyectos_engine)
 
 from modulos.auth_engine import render_login_card, render_user_profile_dialog
 from modulos.admin_engine import render_admin_dashboard
 from modulos.bug_tracker import render_bug_report_dialog
+from modulos.personal_engine import render_personal_tab
+from modulos.proveedores_engine import render_proveedores_tab
+from modulos.proyectos_engine import render_proyectos_tab
 from modulos.db_engine import (
     normalizar_unidad, unidades_list, admite_decimales, get_proyectos, get_biblioteca_instituciones,
     get_biblioteca_conceptos, get_conceptos, get_estimaciones, get_mediciones,
@@ -462,11 +471,12 @@ if st.session_state.get("vista_actual") == "admin" and es_admin_usr:
 ts_descarga = int(datetime.datetime.now().timestamp())
 
 # =============================================================
-# INTERFAZ PRINCIPAL (6 PESTAÑAS)
+# INTERFAZ PRINCIPAL (8 PESTAÑAS UNIVERSALES)
 # =============================================================
-tab_dashboard, tab_captura, tab_estimaciones, tab_catalogo, tab_biblioteca, tab_proyectos = st.tabs([
-    "📊 Control Presupuestal", "📐 Captura en Campo", "📑 Estimaciones", 
-    "📚 Catálogo del Proyecto", "📖 Biblioteca Maestra de Conceptos", "🏢 Proyectos"
+tab_dashboard, tab_captura, tab_estimaciones, tab_catalogo, tab_biblioteca, tab_personal, tab_proveedores, tab_proyectos = st.tabs([
+    "📊 Resumen Financiero", "📐 Captura en Campo", "📑 Estimaciones y Raya", 
+    "📚 Catálogo del Proyecto", "📖 Biblioteca Maestra", "👷 Personal y Cuadrillas",
+    "🚚 Proveedores", "🏢 Proyectos"
 ])
 
 lista_proyectos = get_proyectos(user_id)
@@ -1665,147 +1675,19 @@ with tab_biblioteca:
         st.info(f"ℹ️ La institución '{cat_bib_sel}' no tiene conceptos registrados aún. Utiliza las opciones de arriba para importar desde Excel o dar de alta conceptos manualmente.")
 
 # -------------------------------------------------------------
-# TAB 6: PROYECTOS (DATOS GENERALES)
+# TAB 6: PERSONAL Y CUADRILLAS
+# -------------------------------------------------------------
+with tab_personal:
+    render_personal_tab(supabase, user_id)
+
+# -------------------------------------------------------------
+# TAB 7: PROVEEDORES COMERCIALES
+# -------------------------------------------------------------
+with tab_proveedores:
+    render_proveedores_tab(supabase, user_id)
+
+# -------------------------------------------------------------
+# TAB 8: GESTIÓN DE PROYECTOS Y GEORREFERENCIACIÓN
 # -------------------------------------------------------------
 with tab_proyectos:
-    st.markdown("### Gestión de Proyectos 🏢")
-    col_p_alta, col_p_baja = st.columns(2)
-
-    with col_p_alta:
-        with st.expander("➕ Dar de alta nuevo proyecto", expanded=False):
-            with st.form("form_nuevo_proyecto", clear_on_submit=True):
-                nombre_obra = st.text_input("Nombre de la Obra *", placeholder="Inserte aquí el nombre oficial completo de la obra...")
-                descripcion_sintetica = st.text_area("Descripción sintética", placeholder="Escriba un resumen del alcance de los trabajos...")
-                c1, c2 = st.columns(2)
-                ubicacion = c1.text_input("Ubicación", placeholder="Ej: Villa de Álvarez, Colima")
-                unidad = c2.text_input("Unidad médica / Inmueble", placeholder="Ej: HGZ-01, UMF-19...")
-                c3, c4 = st.columns(2)
-                contrato_no = c3.text_input("N° de Contrato", placeholder="Ej: C5M0077")
-                concurso_no = c4.text_input("N° de Concurso / Licitación", placeholder="Ej: LO-50-GYR-050GYR080-N-15-2025")
-                c5, c6 = st.columns(2)
-                contratista = c5.text_input("Contratista / Empresa", placeholder="Razón social o nombre del contratista...")
-                residente = c6.text_input("Residente de Obra / Supervisor", placeholder="Nombre del responsable de supervisión...")
-                
-                if st.form_submit_button("Guardar Proyecto"):
-                    if not nombre_obra.strip(): st.error("El nombre de la obra es obligatorio.")
-                    else:
-                        supabase.table("proyectos").insert({
-                            "user_id": user_id, "nombre_obra": nombre_obra.strip(), "descripcion_sintetica": descripcion_sintetica.strip(),
-                            "ubicacion": ubicacion.strip(), "unidad": unidad.strip(), "contrato_no": contrato_no.strip(),
-                            "concurso_no": concurso_no.strip(), "contratista": contratista.strip(), "residente_obra": residente.strip()
-                        }).execute()
-                        get_proyectos.clear()
-                        st.success("✅ Proyecto registrado con éxito.")
-                        st.rerun()
-
-    proy_dict_delete = {f"#{idx} — {p['nombre_obra'][:70]}... ({p.get('contrato_no') or 'S/C'})": p["id"] for idx, p in enumerate(lista_proyectos, start=1)} if lista_proyectos else {}
-
-    with col_p_baja:
-        with st.expander("🗑 Eliminar Proyecto"):
-            if not proy_dict_delete: st.info("No hay proyectos registrados para eliminar.")
-            else:
-                proy_del_sel = st.selectbox("Seleccionar proyecto a borrar:", list(proy_dict_delete.keys()), key=f"del_proy_sel_{st.session_state.del_proy_counter}")
-                st.warning("⚠️ Eliminar un proyecto borrará en cascada todo su catálogo, estimaciones y mediciones.")
-                if st.button("Eliminar Proyecto", type="primary", disabled=not st.checkbox("Confirmo la eliminación definitiva del proyecto", key=f"chk_del_proy_{st.session_state.del_proy_counter}")):
-                    id_proy_del = proy_dict_delete[proy_del_sel]
-                    try:
-                        # 1. Recolectar evidencias de todas las mediciones de este proyecto
-                        archivos_ev_proy = []
-                        try:
-                            res_est_p = supabase.table("estimaciones").select("id").eq("id_proyecto", id_proy_del).execute()
-                            est_ids = [e["id"] for e in (res_est_p.data or [])]
-                            if est_ids:
-                                res_m_p = supabase.table("mediciones_campo").select("url_foto, url_croquis").in_("id_estimacion", est_ids).execute()
-                                for m_row in (res_m_p.data or []):
-                                    if m_row.get("url_foto"):
-                                        nf = extraer_nombre_archivo(m_row["url_foto"])
-                                        if nf: archivos_ev_proy.append(nf)
-                                    if m_row.get("url_croquis"):
-                                        nc = extraer_nombre_archivo(m_row["url_croquis"])
-                                        if nc: archivos_ev_proy.append(nc)
-                        except Exception:
-                            pass
-
-                        # 2. Borrar primero en BD (Postgres ejecuta CASCADE en catalogo, estimaciones y mediciones)
-                        supabase.table("proyectos").delete().eq("id", id_proy_del).execute()
-
-                        # 3. Solo tras éxito en BD, purgar evidencias de Storage
-                        if archivos_ev_proy:
-                            for chunk_ev in [archivos_ev_proy[i:i+50] for i in range(0, len(archivos_ev_proy), 50)]:
-                                try: supabase.storage.from_("evidencias").remove(chunk_ev)
-                                except: pass
-
-                        get_proyectos.clear()
-                        get_conceptos.clear()
-                        get_estimaciones.clear()
-                        get_mediciones.clear()
-                        st.session_state.del_proy_counter += 1
-                        st.success("Proyecto y todos sus datos vinculados eliminados correctamente.")
-                        st.rerun()
-                    except Exception as ex_del_p:
-                        st.error(f"Error al eliminar proyecto: {ex_del_p}")
-
-    if lista_proyectos:
-        st.markdown("##### Proyectos Registrados:")
-        st.caption("💡 *Haz doble clic sobre cualquier campo para actualizar los datos oficiales del contrato.*")
-        df_p = pd.DataFrame(lista_proyectos)
-        df_p.insert(0, "#", range(1, len(df_p) + 1))
-        cols_mostrar = ["#", "nombre_obra", "unidad", "contrato_no", "concurso_no", "ubicacion", "contratista", "residente_obra"]
-        for c_m in cols_mostrar[1:]: df_p[c_m] = df_p[c_m].fillna("").astype(str)
-
-        ed_proy_key = f"editor_proyectos_{st.session_state.get('ed_proy_counter', 0)}"
-        edited_proy = st.data_editor(
-            df_p[cols_mostrar],
-            column_config={
-                "#": st.column_config.NumberColumn("#", disabled=True), "nombre_obra": st.column_config.TextColumn("Nombre de la Obra", required=True),
-                "unidad": st.column_config.TextColumn("Unidad Médica"), "contrato_no": st.column_config.TextColumn("Contrato N°"),
-                "concurso_no": st.column_config.TextColumn("Licitación N°"), "ubicacion": st.column_config.TextColumn("Ubicación"),
-                "contratista": st.column_config.TextColumn("Contratista"), "residente_obra": st.column_config.TextColumn("Residente / Supervisor")
-            },
-            use_container_width=True, hide_index=True, key=ed_proy_key
-        )
-
-        if ed_proy_key in st.session_state and st.session_state[ed_proy_key].get("edited_rows", {}):
-            error_p_msg = None
-            cambios_p_guardados = 0
-            for row_str, col_vals in list(st.session_state[ed_proy_key]["edited_rows"].items()):
-                try:
-                    r_idx = int(row_str)
-                except ValueError:
-                    continue
-                if r_idx >= len(lista_proyectos):
-                    continue
-
-                id_proy_mod = lista_proyectos[r_idx]["id"]
-                up_p = {}
-
-                if "nombre_obra" in col_vals:
-                    val_nom = col_vals["nombre_obra"]
-                    if val_nom is None or not str(val_nom).strip():
-                        error_p_msg = "⚠️ El nombre de la obra es obligatorio y no puede quedar vacío."
-                        break
-                    up_p["nombre_obra"] = str(val_nom).strip()
-
-                for campo in ["unidad", "contrato_no", "concurso_no", "ubicacion", "contratista", "residente_obra"]:
-                    if campo in col_vals:
-                        up_p[campo] = str(col_vals[campo] or "").strip()
-
-                if up_p:
-                    try:
-                        supabase.table("proyectos").update(up_p).eq("id", id_proy_mod).execute()
-                        cambios_p_guardados += 1
-                    except Exception as e:
-                        error_p_msg = f"⚠️ Error al actualizar el proyecto: {e}"
-                        break
-
-            if error_p_msg:
-                st.toast(error_p_msg, icon="⚠️")
-                st.session_state["ed_proy_counter"] = st.session_state.get("ed_proy_counter", 0) + 1
-                st.session_state.pop(ed_proy_key, None)
-                st.rerun()
-            elif cambios_p_guardados > 0:
-                get_proyectos.clear()
-                st.toast("✅ Datos de la obra actualizados.")
-                st.session_state["ed_proy_counter"] = st.session_state.get("ed_proy_counter", 0) + 1
-                st.session_state.pop(ed_proy_key, None)
-                st.rerun()
+    render_proyectos_tab(supabase, user_id, lista_proyectos, get_proyectos)
