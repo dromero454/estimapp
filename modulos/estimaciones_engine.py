@@ -3,7 +3,8 @@ import pandas as pd
 import datetime
 import urllib.request
 import json
-from modulos.db_engine import extraer_nombre_archivo
+from modulos.db_engine import extraer_nombre_archivo, extraer_nombres_archivos
+from modulos.pdf_engine import generar_pdf_recibo_raya
 from modulos.excel_engine import (
     inyectar_datos_excel_imss, inyectar_datos_excel_pjf,
     generar_excel_estimapp, descargar_plantilla_supabase
@@ -211,11 +212,9 @@ def render_estimaciones_tab(supabase, user_id: str, lista_proyectos: list, get_e
                             res_meds_est = supabase.table("mediciones_campo").select("url_foto, url_croquis").eq("id_estimacion", id_est_del).execute()
                             for m_row in (res_meds_est.data or []):
                                 if m_row.get("url_foto"):
-                                    nf = extraer_nombre_archivo(m_row["url_foto"])
-                                    if nf: archivos_ev_est.append(nf)
+                                    archivos_ev_est.extend(extraer_nombres_archivos(m_row["url_foto"]))
                                 if m_row.get("url_croquis"):
-                                    nc = extraer_nombre_archivo(m_row["url_croquis"])
-                                    if nc: archivos_ev_est.append(nc)
+                                    archivos_ev_est.extend(extraer_nombres_archivos(m_row["url_croquis"]))
                         except Exception:
                             pass
 
@@ -375,7 +374,7 @@ def render_estimaciones_tab(supabase, user_id: str, lista_proyectos: list, get_e
         debe_mostrar_raya = (modalidad_proy in ["privada", "mixta"]) or (len(meds_con_trabajador) > 0)
 
         if not debe_mostrar_raya:
-            st.info("💡 En proyectos de obra pública tradicional, la liquidación de raya es opcional. Asigna destajistas a tus mediciones de campo en la Tab 2 para habilitar este control.")
+            st.info("💡 En proyectos de obra pública tradicional, la liquidación de raya es opcional. Asigna destajistas a tus mediciones de campo en la Tab de Captura en Campo para habilitar este control.")
         else:
             if not meds_con_trabajador:
                 st.warning("⚠️ No se registraron mediciones con destajista asignado en este periodo de corte.")
@@ -445,22 +444,17 @@ def render_estimaciones_tab(supabase, user_id: str, lista_proyectos: list, get_e
                     hide_index=True
                 )
 
-                # Previsualización y Descarga del Recibo de Raya
-                texto_recibo = generar_texto_recibo_raya(proy_obj_actual, est_obj_raya, filas_raya, total_raya_periodo)
-                
-                col_rec_btn, col_rec_exp = st.columns([1, 2])
-                with col_rec_btn:
-                    st.download_button(
-                        label="📄 Descargar Recibo de Liquidación (TXT)",
-                        data=texto_recibo,
-                        file_name=f"Recibo_Raya_{proy_obj_actual.get('nombre_obra', 'Obra')}_Est_{est_obj_raya['num_periodo']}.txt",
-                        mime="text/plain",
-                        use_container_width=True,
-                        key="btn_descarga_recibo_raya"
-                    )
-
-                with st.expander("👁️ Vista Previa del Recibo de Liquidación"):
-                    st.text(texto_recibo)
+                # Descarga Oficial del Recibo de Liquidación de Raya en PDF
+                pdf_raya_bytes = generar_pdf_recibo_raya(proy_obj_actual, est_obj_raya, filas_raya, total_raya_periodo)
+                contrato_raya = proy_obj_actual.get('contrato_no') or 'Obra'
+                st.download_button(
+                    label="📄 Descargar Recibo de Liquidación (PDF)",
+                    data=pdf_raya_bytes,
+                    file_name=f"Recibo_Raya_{contrato_raya}_Est_{est_obj_raya['num_periodo']}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                    key="btn_descarga_recibo_raya"
+                )
 
         # Muestra métricas de telemetría si están registradas para la estimación activa
         clima_est = clima_dict.get(est_obj_raya["id"])

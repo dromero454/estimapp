@@ -6,10 +6,24 @@
 - **Entorno Virtual**: Python activo en `./venv/`. Debe activarse siempre con `source venv/Scripts/activate`.
 - **Ejecución Local**: `streamlit run app.py`.
 - **Especificaciones Técnicas**: Consulta obligatoria de `./especificaciones.md` para esquemas de tablas, buckets y arquitectura relacional.
+- **Modelo de Datos Oficial**: Consulta obligatoria de `./data_model_v2.0.md` para tipos de columnas, constraints, índices y RLS.
+- **Visión General y Futuro**: Consulta obligatoria de `./README.md` para entender el alcance, flujos de valor y hoja de ruta (Machine Learning).
 
 ---
 
-## 2. Directorios de Recursos y Rutas Relativas
+## 2. Onboarding Obligatorio para Nuevos Agentes (PRIMER PASO CRÍTICO)
+Todo agente o instancia de IA que comience a trabajar en este repositorio **DEBE realizar obligatoriamente como primer paso** la lectura integral de los siguientes documentos antes de inspeccionar o modificar código:
+
+1. **Carpeta de Reportes de Estatus (`./development_status_reports/`)**:
+   - **¿Por qué es indispensable?**: Esta carpeta contiene la memoria viva, incremental y cronológica del proyecto. En cada reporte se documenta exhaustivamente el estado exacto de la base de código, las decisiones técnicas acordadas con el desarrollador, los bugs no evidentes ya resueltos (ej. peculiaridades del DOM en Streamlit, espaciadores milimétricos, fallos de formato en Vega-Lite), y los hallazgos empíricos acumulados.
+   - **Contenido**: El agente debe consultar en orden cronológico todos los reportes (iniciando por `1_estatus_report_07102026.md`) para entender qué se hizo, por qué se hizo de esa forma específica y evitar a toda costa regresiones o reinventar soluciones ya superadas.
+2. **`README.md`**: Contexto general de la plataforma, arquitectura de negocio, relaciones entre entidades y planes de integración de Machine Learning para predicción de viabilidad de costos.
+3. **`data_model_v2.0.md`**: Esquema relacional vivo (13 tablas, 1 vista analítica, 3 buckets de storage y políticas RLS).
+4. **`especificaciones.md`**: Arquitectura técnica modular, 8 tabs de la aplicación y contratos de backend.
+
+---
+
+## 3. Directorios de Recursos y Rutas Relativas
 El agente DEBE consultar y respetar los manuales y directrices locales antes de sugerir o escribir código:
 
 - **Skills Oficiales de Streamlit**: `./.agents/skills/developing-with-streamlit/`
@@ -21,7 +35,7 @@ El agente DEBE consultar y respetar los manuales y directrices locales antes de 
 
 ---
 
-## 3. Integración con Supabase MCP Server
+## 4. Integración con Supabase MCP Server
 El agente dispone de integración activa con el servidor MCP de Supabase (`supabase-db` vía OAuth):
 - **Capacidad de Inspección**: Utilizar prioritariamente las herramientas del servidor MCP para consultar schemas reales, tablas, tipos de columnas, foreign keys y políticas RLS directamente en Supabase Cloud.
 - **Seguridad en Consultas**: Priorizar operaciones de solo lectura para diagnóstico. NUNCA ejecutar sentencias `DROP`, `TRUNCATE` ni `DELETE` directas sobre datos existentes de clientes o proyectos reales.
@@ -29,7 +43,7 @@ El agente dispone de integración activa con el servidor MCP de Supabase (`supab
 
 ---
 
-## 4. Protocolo Holístico de Pruebas E2E (Simulación de Usuario)
+## 5. Protocolo Holístico de Pruebas E2E (Simulación de Usuario)
 Al realizar validaciones completas, el agente debe cubrir el flujo de vida completo del sistema:
 
 1. **Autenticación**: Iniciar sesión utilizando las credenciales de testing configuradas en `.streamlit/secrets.toml` bajo el bloque `[test_user]`.
@@ -47,7 +61,7 @@ Al realizar validaciones completas, el agente debe cubrir el flujo de vida compl
 
 ---
 
-## 5. Reglas Críticas de Arquitectura (INVIOLABLES)
+## 6. Reglas Críticas de Arquitectura (INVIOLABLES)
 1. **Header Sticky Unificado**:
    - El membrete superior (Logo, Institución, Subtítulo, Usuario y botón Salir) DEBE residir en un único bloque HTML inyectado con clase `.sticky-header` (`top: 0`).
    - NUNCA dividir el encabezado en `st.columns` nativos de Streamlit. Las pestañas (`tablist`) deben fijarse dinámicamente debajo del header (`top: calc(var(--sticky-header-height, 98px) - 2px)`).
@@ -55,7 +69,7 @@ Al realizar validaciones completas, el agente debe cubrir el flujo de vida compl
    - `instituciones`: Tabla propia en Supabase. NUNCA usar registros dummy 'INIT'.
    - `categoria`: Subpartida/partida opcional dentro de los conceptos.
 3. **Persistencia y Aislamiento Multiusuario Estricto (RLS)**:
-   - Toda consulta e inserción debe vincular y filtrar explícitamente por el `user_id` de la sesión activa (`.eq("user_id", user_id)` o relación de propiedad de proyecto). NUNCA depender de registros globales o huérfanos con `user_id` nulo. Row Level Security (RLS) se encuentra activo en las 7 tablas de la base de datos.
+   - Toda consulta e inserción debe vincular y filtrar explícitamente por el `user_id` de la sesión activa (`.eq("user_id", user_id)` o relación de propiedad de proyecto). NUNCA depender de registros globales o huérfanos con `user_id` nulo. Row Level Security (RLS) se encuentra activo en las 13 tablas de la base de datos.
 4. **Normalización de Unidades**:
    - Obligatorio usar `normalizar_unidad()` de `./modulos/db_engine.py`.
 5. **Limpieza de Formularios sin Romper Sesión**:
@@ -63,7 +77,7 @@ Al realizar validaciones completas, el agente debe cubrir el flujo de vida compl
 
 ---
 
-## 6. Protocolo de Resolución Agéntica de Bugs (Bug Tracker Integrado)
+## 7. Protocolo de Resolución Agéntica de Bugs (Bug Tracker Integrado)
 Cuando el desarrollador indique "resuelve los bugs abiertos", el agente debe:
 1. Consultar `reportes_bugs` donde `estado = 'Abierto'`.
 2. Leer las descripciones, revisar `tabs_afectadas` y descargar las evidencias adjuntas del bucket `bugs`.

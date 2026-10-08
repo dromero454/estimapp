@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import uuid
-from modulos.db_engine import normalizar_unidad, extraer_nombre_archivo, optimizar_imagen
+from modulos.db_engine import normalizar_unidad, extraer_nombre_archivo, extraer_nombres_archivos, optimizar_imagen
 
 def get_personal_obra_disponible(supabase, user_id: str):
     """Consulta la lista de trabajadores activos para el usuario."""
@@ -181,8 +181,8 @@ def render_mediciones_tab(supabase, user_id: str, lista_proyectos: list, get_est
     st.info(f"📐 Cantidad Calculada: **{calc_preview:.3f} {u_base}** | Importe Estimado: **${importe_preview:,.2f} MXN**")
 
     col_f1, col_f2 = st.columns(2)
-    foto = col_f1.file_uploader("Fotografía de Evidencia", type=["jpg", "jpeg", "png"], key=f"file_foto_{c_ver}")
-    croquis = col_f2.file_uploader("Croquis / Plano", type=["jpg", "jpeg", "png"], key=f"file_croquis_{c_ver}")
+    fotos = col_f1.file_uploader("Fotografías de Evidencia", type=["jpg", "jpeg", "png"], accept_multiple_files=True, key=f"file_foto_{c_ver}")
+    croquis_list = col_f2.file_uploader("Croquis / Planos", type=["jpg", "jpeg", "png"], accept_multiple_files=True, key=f"file_croquis_{c_ver}")
 
     if st.button("💾 Guardar Medición en Generador", type="primary"):
         if calc_preview <= 0:
@@ -191,21 +191,30 @@ def render_mediciones_tab(supabase, user_id: str, lista_proyectos: list, get_est
             st.warning("Debes indicar la Localización / Elemento.")
         else:
             archivos_subidos_tmp = []
-            url_foto = None
-            url_croquis = None
+            urls_fotos = []
+            urls_croquis = []
             try:
-                if foto:
-                    contenido_f, mime_f = optimizar_imagen(foto)
-                    fname_f = f"{uuid.uuid4()}.jpg"
-                    supabase.storage.from_("evidencias").upload(fname_f, contenido_f, {"content-type": mime_f})
-                    url_foto = supabase.storage.from_("evidencias").get_public_url(fname_f)
-                    archivos_subidos_tmp.append(fname_f)
-                if croquis:
-                    contenido_c, mime_c = optimizar_imagen(croquis)
-                    fname_c = f"{uuid.uuid4()}.jpg"
-                    supabase.storage.from_("evidencias").upload(fname_c, contenido_c, {"content-type": mime_c})
-                    url_croquis = supabase.storage.from_("evidencias").get_public_url(fname_c)
-                    archivos_subidos_tmp.append(fname_c)
+                if fotos:
+                    f_items = fotos if isinstance(fotos, list) else [fotos]
+                    for f in f_items:
+                        contenido_f, mime_f = optimizar_imagen(f)
+                        fname_f = f"{uuid.uuid4()}.jpg"
+                        supabase.storage.from_("evidencias").upload(fname_f, contenido_f, {"content-type": mime_f})
+                        u_f = supabase.storage.from_("evidencias").get_public_url(fname_f)
+                        urls_fotos.append(u_f)
+                        archivos_subidos_tmp.append(fname_f)
+                if croquis_list:
+                    c_items = croquis_list if isinstance(croquis_list, list) else [croquis_list]
+                    for c in c_items:
+                        contenido_c, mime_c = optimizar_imagen(c)
+                        fname_c = f"{uuid.uuid4()}.jpg"
+                        supabase.storage.from_("evidencias").upload(fname_c, contenido_c, {"content-type": mime_c})
+                        u_c = supabase.storage.from_("evidencias").get_public_url(fname_c)
+                        urls_croquis.append(u_c)
+                        archivos_subidos_tmp.append(fname_c)
+
+                url_foto = ",".join(urls_fotos) if urls_fotos else None
+                url_croquis = ",".join(urls_croquis) if urls_croquis else None
 
                 if es_kg: v_an = v_kg
                 elif es_lt: v_l = v_lt
@@ -285,8 +294,8 @@ def render_mediciones_tab(supabase, user_id: str, lista_proyectos: list, get_est
                 "Unidad": u_c,
                 "P.U. ($)": pu_c,
                 "Importe ($)": imp_m,
-                "Tiene Foto": "Sí" if m.get("url_foto") else "No",
-                "Tiene Croquis": "Sí" if m.get("url_croquis") else "No"
+                "Tiene Foto": f"Sí ({len([u for u in str(m.get('url_foto') or '').split(',') if u.strip()])})" if m.get("url_foto") else "No",
+                "Tiene Croquis": f"Sí ({len([u for u in str(m.get('url_croquis') or '').split(',') if u.strip()])})" if m.get("url_croquis") else "No"
             })
             meds_borrar_dict[f"#{idx} — {clave_c} ({m.get('localizacion', '')} — {cant_m} {u_c})"] = m
 
@@ -411,11 +420,9 @@ def render_mediciones_tab(supabase, user_id: str, lista_proyectos: list, get_est
                     obj_med_borrar = meds_borrar_dict[label]
                     ids_to_delete.append(obj_med_borrar["id"])
                     if obj_med_borrar.get("url_foto"):
-                        nom_f = extraer_nombre_archivo(obj_med_borrar["url_foto"])
-                        if nom_f: archivos_a_borrar.append(nom_f)
+                        archivos_a_borrar.extend(extraer_nombres_archivos(obj_med_borrar["url_foto"]))
                     if obj_med_borrar.get("url_croquis"):
-                        nom_c = extraer_nombre_archivo(obj_med_borrar["url_croquis"])
-                        if nom_c: archivos_a_borrar.append(nom_c)
+                        archivos_a_borrar.extend(extraer_nombres_archivos(obj_med_borrar["url_croquis"]))
 
                 try:
                     # 1. Eliminar primero de la base de datos para garantizar integridad

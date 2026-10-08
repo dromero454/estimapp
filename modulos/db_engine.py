@@ -30,13 +30,13 @@ def admite_decimales(unidad: str) -> bool:
     u_norm = normalizar_unidad(unidad)
     return u_norm not in UNIDADES_ENTERAS
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=60)
 def get_proyectos(user_id: str):
     supabase = st.session_state["supabase_client"]
     res = supabase.table("proyectos").select("*").eq("user_id", user_id).order("id").execute()
     return res.data or []
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=60)
 def get_biblioteca_instituciones(user_id: str):
     """Consulta 'instituciones' y 'biblioteca_conceptos' del usuario activo sin duplicados ni huérfanos."""
     supabase = st.session_state["supabase_client"]
@@ -70,7 +70,7 @@ def get_biblioteca_instituciones(user_id: str):
         
     return sorted(list(insts))
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=60)
 def get_biblioteca_conceptos(institucion: str, user_id: str):
     """Obtiene los conceptos maestros filtrando por la institución activa y user_id."""
     if not institucion:
@@ -84,19 +84,19 @@ def get_biblioteca_conceptos(institucion: str, user_id: str):
         .execute()
     return res.data or []
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=60)
 def get_conceptos(id_proyecto: int):
     supabase = st.session_state["supabase_client"]
     res = supabase.table("catalogo_conceptos").select("*").eq("id_proyecto", id_proyecto).order("id").execute()
     return res.data or []
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=60)
 def get_estimaciones(id_proyecto: int):
     supabase = st.session_state["supabase_client"]
     res = supabase.table("estimaciones").select("*").eq("id_proyecto", id_proyecto).order("num_periodo").execute()
     return res.data or []
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=60)
 def get_mediciones(id_estimacion: int):
     supabase = st.session_state["supabase_client"]
     res = supabase.table("mediciones_campo").select(
@@ -236,7 +236,18 @@ def procesar_excel_importacion(df: pd.DataFrame, tipo="proyecto", pct_utilidad_d
 
 def extraer_nombre_archivo(url_publica: str) -> str:
     if not url_publica: return ""
-    return url_publica.split("/")[-1].split("?")[0]
+    primera = str(url_publica).split(",")[0].strip()
+    return primera.split("/")[-1].split("?")[0]
+
+def extraer_nombres_archivos(url_campo: str) -> list:
+    """Extrae todos los nombres de archivo de una cadena de URLs separadas por comas."""
+    if not url_campo: return []
+    nombres = []
+    for u in str(url_campo).split(","):
+        u = u.strip()
+        if u and "/" in u:
+            nombres.append(u.split("/")[-1].split("?")[0])
+    return nombres
 
 def optimizar_imagen(archivo_subido, max_dim=1280, calidad=80):
     try:

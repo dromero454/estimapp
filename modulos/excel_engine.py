@@ -141,25 +141,31 @@ def inyectar_datos_excel_imss(plantilla_bytes, proy_info, estimacion_info, conce
         c_ref = next((c for c in conceptos_cat if c['id'] == m['id_concepto']), {})
         c_clave = c_ref.get('clave', 'S/C')
         if m.get('url_croquis'):
-            try:
-                resp = requests.get(m['url_croquis'], timeout=10)
-                if resp.status_code == 200:
-                    img = OpenpyxlImage(io.BytesIO(resp.content))
-                    img.width, img.height = 400, 300
-                    ws_croquis.add_image(img, f'B{fila_croquis}')
-                    set_cell_value(ws_croquis, 'A', fila_croquis, f"Concepto: {c_clave} - Loc: {m.get('localizacion','')}")
-                    fila_croquis += 18
-            except Exception: pass
+            for u_c in str(m['url_croquis']).split(','):
+                u_c = u_c.strip()
+                if not u_c: continue
+                try:
+                    resp = requests.get(u_c, timeout=10)
+                    if resp.status_code == 200:
+                        img = OpenpyxlImage(io.BytesIO(resp.content))
+                        img.width, img.height = 400, 300
+                        ws_croquis.add_image(img, f'B{fila_croquis}')
+                        set_cell_value(ws_croquis, 'A', fila_croquis, f"Concepto: {c_clave} - Loc: {m.get('localizacion','')}")
+                        fila_croquis += 18
+                except Exception: pass
         if m.get('url_foto'):
-            try:
-                resp = requests.get(m['url_foto'], timeout=10)
-                if resp.status_code == 200:
-                    img = OpenpyxlImage(io.BytesIO(resp.content))
-                    img.width, img.height = 400, 300
-                    ws_fotos.add_image(img, f'B{fila_fotos}')
-                    set_cell_value(ws_fotos, 'A', fila_fotos, f"Concepto: {c_clave} - Loc: {m.get('localizacion','')}")
-                    fila_fotos += 18
-            except Exception: pass
+            for u_f in str(m['url_foto']).split(','):
+                u_f = u_f.strip()
+                if not u_f: continue
+                try:
+                    resp = requests.get(u_f, timeout=10)
+                    if resp.status_code == 200:
+                        img = OpenpyxlImage(io.BytesIO(resp.content))
+                        img.width, img.height = 400, 300
+                        ws_fotos.add_image(img, f'B{fila_fotos}')
+                        set_cell_value(ws_fotos, 'A', fila_fotos, f"Concepto: {c_clave} - Loc: {m.get('localizacion','')}")
+                        fila_fotos += 18
+                except Exception: pass
 
     output = io.BytesIO()
     wb.save(output)
@@ -249,8 +255,12 @@ def inyectar_datos_excel_pjf(plantilla_bytes, proy_info, estimacion_info, concep
         if m.get('url_foto') or m.get('url_croquis'):
             c_ref = next((c for c in conceptos_cat if c['id'] == m['id_concepto']), {})
             desc_base = f"{c_ref.get('clave', '')} - {m.get('localizacion', '')}"
-            if m.get('url_foto'): fotos_list.append((m['url_foto'], desc_base))
-            if m.get('url_croquis'): fotos_list.append((m['url_croquis'], f"{desc_base} (Croquis)"))
+            if m.get('url_foto'):
+                for u_f in str(m['url_foto']).split(','):
+                    if u_f.strip(): fotos_list.append((u_f.strip(), desc_base))
+            if m.get('url_croquis'):
+                for u_c in str(m['url_croquis']).split(','):
+                    if u_c.strip(): fotos_list.append((u_c.strip(), f"{desc_base} (Croquis)"))
 
     def _insertar_img(ws, r_img, c_let, r_txt, f_data):
         url, desc = f_data
@@ -423,8 +433,12 @@ def generar_excel_estimapp(proy_info, estimacion_info, conceptos_cat, estimacion
             c_ref = next((c for c in conceptos_cat if c['id'] == m['id_concepto']), {})
             desc_base = f"{c_ref.get('clave', '')} - {m.get('localizacion', '')}"
             urls = []
-            if m.get('url_foto'): urls.append((m['url_foto'], desc_base))
-            if m.get('url_croquis'): urls.append((m['url_croquis'], f"{desc_base} (Croquis)"))
+            if m.get('url_foto'):
+                for u_f in str(m['url_foto']).split(','):
+                    if u_f.strip(): urls.append((u_f.strip(), desc_base))
+            if m.get('url_croquis'):
+                for u_c in str(m['url_croquis']).split(','):
+                    if u_c.strip(): urls.append((u_c.strip(), f"{desc_base} (Croquis)"))
             
             for url, desc in urls:
                 try:

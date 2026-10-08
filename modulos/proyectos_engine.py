@@ -4,6 +4,7 @@ import urllib.request
 import urllib.parse
 import json
 from supabase import Client
+from modulos.db_engine import extraer_nombres_archivos
 
 MODALIDADES_MAP = {
     "Obra Pública": "publica",
@@ -21,67 +22,125 @@ TIPOS_OBRA_MAP = {
 TIPOS_OBRA_INV = {v: k for k, v in TIPOS_OBRA_MAP.items()}
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def obtener_geolocalizacion_ip() -> dict:
+    """
+    Obtiene la ubicación aproximada basada en la IP pública para contextualizar
+    las búsquedas geográficas de Nominatim. Retorna código de país (ej: 'mx')
+    y coordenadas aproximadas con timeout defensivo estricto (<2.5s).
+    """
+    try:
+        req = urllib.request.Request(
+            "http://ip-api.com/json/",
+            headers={"User-Agent": "Estimapp/2.0"}
+        )
+        with urllib.request.urlopen(req, timeout=2.5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        if data.get("status") == "success":
+            return {
+                "country_code": str(data.get("countryCode", "MX")).lower(),
+                "country": data.get("country", "México"),
+                "region": data.get("regionName", ""),
+                "city": data.get("city", ""),
+                "lat": float(data.get("lat", 19.24)),
+                "lon": float(data.get("lon", -103.72))
+            }
+    except Exception:
+        pass
+    return {
+        "country_code": "mx",
+        "country": "México",
+        "region": "",
+        "city": "",
+        "lat": 19.24,
+        "lon": -103.72
+    }
+
+
 def resolver_geocodificacion_nominatim(direccion_query: str) -> dict:
     """
-    Geocodifica una dirección usando el servicio abierto de OpenStreetMap / Nominatim.
-    Respeta la cuota de uso (1 req/s) e incluye el encabezado User-Agent obligatorio.
+    Geocodifica una dirección usando OpenStreetMap / Nominatim.
+    Prioriza el contexto geográfico por IP del usuario (código de país y viewbox)
+    para máxima precisión de sugerencias locales, con fallback global defensivo.
     """
     if not direccion_query or not direccion_query.strip():
         return {"error": "Por favor ingresa una dirección o referencia válida para buscar."}
 
+    query_encoded = urllib.parse.quote(direccion_query.strip())
+    ip_info = obtener_geolocalizacion_ip()
+
+    # 1. Búsqueda con sesgo por IP (código de país y cuadrante viewbox)
+    cc = ip_info.get("country_code", "mx")
+    lat_ip = ip_info.get("lat")
+    lon_ip = ip_info.get("lon")
+
+    url_biased = f"https://nominatim.openstreetmap.org/search?q={query_encoded}&format=json&addressdetails=1&limit=1&countrycodes={cc}"
+    if lat_ip is not None and lon_ip is not None:
+        min_lon = round(lon_ip - 2.5, 4)
+        max_lat = round(lat_ip + 2.5, 4)
+        max_lon = round(lon_ip + 2.5, 4)
+        min_lat = round(lat_ip - 2.5, 4)
+        url_biased += f"&viewbox={min_lon},{max_lat},{max_lon},{min_lat}&bounded=0"
+
+    data = None
     try:
-        query_encoded = urllib.parse.quote(direccion_query.strip())
-        url = f"https://nominatim.openstreetmap.org/search?q={query_encoded}&format=json&addressdetails=1&limit=1"
-        req = urllib.request.Request(
-            url,
-            headers={"User-Agent": "Estimapp/2.0"}
-        )
+        req = urllib.request.Request(url_biased, headers={"User-Agent": "Estimapp/2.0"})
         with urllib.request.urlopen(req, timeout=6) as response:
             data = json.loads(response.read().decode("utf-8"))
+    except Exception:
+        data = None
 
-        if not data:
-            return {"error": "No se encontraron coordenadas en OpenStreetMap para la dirección ingresada."}
+    # 2. Si no hay coincidencias con el sesgo local, reintentar búsqueda global sin restricciones
+    if not data:
+        try:
+            url_global = f"https://nominatim.openstreetmap.org/search?q={query_encoded}&format=json&addressdetails=1&limit=1"
+            req = urllib.request.Request(url_global, headers={"User-Agent": "Estimapp/2.0"})
+            with urllib.request.urlopen(req, timeout=6) as response:
+                data = json.loads(response.read().decode("utf-8"))
+        except Exception as ex:
+            return {"error": f"Fallo al contactar servicio de geocodificación: {str(ex)}"}
 
-        item = data[0]
-        addr = item.get("address", {})
+    if not data:
+        return {"error": "No se encontraron coordenadas en OpenStreetMap para la dirección ingresada."}
 
-        municipio = (
-            addr.get("city")
-            or addr.get("town")
-            or addr.get("municipality")
-            or addr.get("county")
-            or addr.get("village")
-            or ""
-        )
-        estado = (
-            addr.get("state")
-            or addr.get("province")
-            or addr.get("region")
-            or ""
-        )
-        pais = addr.get("country", "México")
-        codigo_postal = addr.get("postcode", "")
+    item = data[0]
+    addr = item.get("address", {})
 
-        calle_partes = [
-            addr.get("road", ""),
-            addr.get("house_number", ""),
-            addr.get("neighbourhood", "") or addr.get("suburb", "")
-        ]
-        calle = ", ".join([p for p in calle_partes if p]).strip()
+    municipio = (
+        addr.get("city")
+        or addr.get("town")
+        or addr.get("municipality")
+        or addr.get("county")
+        or addr.get("village")
+        or ""
+    )
+    estado = (
+        addr.get("state")
+        or addr.get("province")
+        or addr.get("region")
+        or ""
+    )
+    pais = addr.get("country", "México")
+    codigo_postal = addr.get("postcode", "")
 
-        return {
-            "success": True,
-            "latitud": round(float(item.get("lat")), 6),
-            "longitud": round(float(item.get("lon")), 6),
-            "formatted_address": item.get("display_name", ""),
-            "municipio": municipio,
-            "estado": estado,
-            "pais": pais,
-            "codigo_postal": str(codigo_postal),
-            "direccion_calle": calle or direccion_query.strip()
-        }
-    except Exception as ex:
-        return {"error": f"Fallo al contactar servicio de geocodificación: {str(ex)}"}
+    calle_partes = [
+        addr.get("road", ""),
+        addr.get("house_number", ""),
+        addr.get("neighbourhood", "") or addr.get("suburb", "")
+    ]
+    calle = ", ".join([p for p in calle_partes if p]).strip()
+
+    return {
+        "success": True,
+        "latitud": round(float(item.get("lat")), 6),
+        "longitud": round(float(item.get("lon")), 6),
+        "formatted_address": item.get("display_name", ""),
+        "municipio": municipio,
+        "estado": estado,
+        "pais": pais,
+        "codigo_postal": str(codigo_postal),
+        "direccion_calle": calle or direccion_query.strip()
+    }
 
 
 def render_proyectos_tab(supabase: Client, user_id: str, lista_proyectos: list, get_proyectos_cache_fn):
