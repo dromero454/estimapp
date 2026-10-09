@@ -310,14 +310,16 @@ def render_proyectos_tab(supabase: Client, user_id: str, lista_proyectos: list, 
                 latitud = st.number_input(
                     "Latitud WGS84 (Telemetría Clima)",
                     format="%.6f",
+                    disabled=True,
                     key=f"proy_lat_{p_counter}",
-                    help="Coordenada geográfica requerida para Open-Meteo."
+                    help="Coordenada geográfica resuelta por OpenStreetMap para Open-Meteo y modelos de Machine Learning (solo lectura)."
                 )
                 longitud = st.number_input(
                     "Longitud WGS84 (Telemetría Clima)",
                     format="%.6f",
+                    disabled=True,
                     key=f"proy_lon_{p_counter}",
-                    help="Coordenada geográfica requerida para Open-Meteo."
+                    help="Coordenada geográfica resuelta por OpenStreetMap para Open-Meteo y modelos de Machine Learning (solo lectura)."
                 )
 
             c_g3, c_g4 = st.columns(2)

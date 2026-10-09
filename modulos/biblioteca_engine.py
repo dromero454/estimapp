@@ -123,6 +123,20 @@ def render_biblioteca_tab(supabase: Client, user_id: str):
                 if suma > 0:
                     st.session_state[f"bib_pu_ref_{bib_c}"] = suma
 
+            # Callback reactivo para resetear desglose analítico a 0 si el usuario altera manualmente el PU Referencial
+            def _on_pu_ref_bib_change():
+                mat = st.session_state.get(f"bib_mat_{bib_c}", 0.0) or 0.0
+                mo = st.session_state.get(f"bib_mo_{bib_c}", 0.0) or 0.0
+                herr = st.session_state.get(f"bib_herr_{bib_c}", 0.0) or 0.0
+                ind = st.session_state.get(f"bib_ind_{bib_c}", 0.0) or 0.0
+                suma = round(float(mat) + float(mo) + float(herr) + float(ind), 2)
+                nuevo_pu = st.session_state.get(f"bib_pu_ref_{bib_c}", 0.0) or 0.0
+                if suma > 0 and round(float(nuevo_pu), 2) != suma:
+                    st.session_state[f"bib_mat_{bib_c}"] = 0.0
+                    st.session_state[f"bib_mo_{bib_c}"] = 0.0
+                    st.session_state[f"bib_herr_{bib_c}"] = 0.0
+                    st.session_state[f"bib_ind_{bib_c}"] = 0.0
+
             st.session_state.setdefault(f"bib_pu_ref_{bib_c}", 0.0)
 
             esp_m = st.text_input("Especialidad (Opcional)", placeholder="Ej: 01 PRELIMINARES", key=f"bib_esp_{bib_c}")
@@ -156,7 +170,8 @@ def render_biblioteca_tab(supabase: Client, user_id: str):
             pu_m = st.number_input(
                 "Precio Unitario Referencial ($)",
                 min_value=0.0, step=0.5, format="%.2f",
-                key=f"bib_pu_ref_{bib_c}"
+                key=f"bib_pu_ref_{bib_c}",
+                on_change=_on_pu_ref_bib_change
             )
 
             if st.button("Guardar en Biblioteca", type="primary", key=f"btn_save_bib_{bib_c}"):

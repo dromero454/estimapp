@@ -290,6 +290,7 @@ Sistema integrado de gestión de incidencias, tickets de soporte y bugs del sist
 | `archivos_adjuntos`| `TEXT[]` | SÍ | `'{}'` | — | Rutas relativas de archivos en bucket `bugs`. |
 | `estado` | `TEXT` | NO | `'Abierto'` | — | Estado (`Abierto`, `En Revisión`, `Corregido`, `Validado`). |
 | `notas_resolucion` | `TEXT` | SÍ | `NULL` | — | Explicación técnica de la solución implementada. |
+| `comentarios_revision` | `TEXT` | SÍ | `NULL` | — | Observaciones y feedback del usuario durante iteraciones. |
 | `created_at` | `TIMESTAMPTZ` | NO | `now()` | — | Fecha y hora de creación. |
 | `updated_at` | `TIMESTAMPTZ` | NO | `now()` | — | Fecha y hora de última modificación. |
 

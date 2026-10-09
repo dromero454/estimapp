@@ -37,7 +37,7 @@ importlib.reload(modulos.estimaciones_engine)
 
 from modulos.auth_engine import render_login_card, render_user_profile_dialog
 from modulos.admin_engine import render_admin_dashboard
-from modulos.bug_tracker import render_bug_report_dialog
+from modulos.bug_tracker import render_bug_report_dialog, limpiar_estado_bug
 from modulos.dashboard_engine import render_dashboard_tab
 from modulos.mediciones_engine import render_mediciones_tab
 from modulos.estimaciones_engine import render_estimaciones_tab
@@ -391,6 +391,7 @@ if st.button("Abrir Perfil", key="btn_trigger_mi_perfil"):
 
 # Disparador en segundo plano para abrir el modal de reporte de bugs
 if st.button("Reportar Problema", key="btn_trigger_reportar_bug"):
+    limpiar_estado_bug()
     st.session_state["mostrar_dialogo_bug"] = True
 
 import streamlit.components.v1 as components
@@ -470,9 +471,8 @@ if st.session_state.get("mostrar_dialogo_cuenta"):
     st.session_state["mostrar_dialogo_cuenta"] = False
     render_user_profile_dialog(supabase, st.session_state["user"], st.session_state.get("perfil", {}))
 
-# Modal de Reporte de Bug si fue invocado (se consume inmediatamente para evitar que reaparezca en reruns)
+# Modal de Reporte de Bug si fue invocado
 if st.session_state.get("mostrar_dialogo_bug"):
-    st.session_state["mostrar_dialogo_bug"] = False
     render_bug_report_dialog(supabase, st.session_state["user"])
 
 # =============================================================

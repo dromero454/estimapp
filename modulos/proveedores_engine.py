@@ -109,15 +109,15 @@ def render_proveedores_tab(supabase: Client, user_id: str):
                 st.info("No hay proveedores registrados para dar de baja.")
             else:
                 prov_dict_del = {
-                    f"#{p['id']} — {p['nombre_comercial']} ({p.get('giro', 'Materiales')})": p["id"]
-                    for p in proveedores_list
+                    f"#{idx} — {p['nombre_comercial']} ({p.get('giro', 'Materiales')})": p["id"]
+                    for idx, p in enumerate(proveedores_list, start=1)
                 }
                 prov_sel_del = st.selectbox(
                     "Seleccionar comercio a dar de baja:",
                     options=list(prov_dict_del.keys()),
                     key=f"del_prov_sel_{pv_counter}"
                 )
-                st.caption("ℹ️ *Los insumos asociados en composiciones APU preservan sus descripciones y costos sin afectación (ON DELETE SET NULL).*")
+                st.caption("ℹ️ *Los insumos asociados en composiciones APU preservan sus descripciones y costos sin afectación.*")
                 
                 chk_del = st.checkbox(
                     "Confirmo la baja de este proveedor",

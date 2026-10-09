@@ -823,6 +823,8 @@ def render_admin_dashboard(supabase: Client):
                     desc_corta = desc_corta[:72] + "..."
 
                 usuario_display = t.get("email") or t.get("nombre") or "-"
+                comentarios_raw = (t.get("comentarios_revision") or "").replace("\n", " ").strip()
+                comentarios_corta = (comentarios_raw[:52] + "...") if len(comentarios_raw) > 55 else comentarios_raw
 
                 rows_incidencias.append({
                     "Folio": t.get("folio"),
@@ -834,6 +836,7 @@ def render_admin_dashboard(supabase: Client):
                     "Estado": t.get("estado"),
                     "Evidencias": adj_str,
                     "Descripción": desc_corta,
+                    "Comentarios": comentarios_corta or "-",
                 })
 
             df_incidencias = pd.DataFrame(rows_incidencias)
@@ -910,12 +913,22 @@ def render_admin_dashboard(supabase: Client):
                         key=f"txt_notas_resolucion_{tkt_activo['id']}"
                     )
 
+                    comentarios_revision_val = st.text_area(
+                        "💬 Comentarios de Revisión / Feedback para Iteración:",
+                        value=tkt_activo.get("comentarios_revision") or "",
+                        placeholder="Escribe aquí tus observaciones o correcciones cuando regreses el ticket a 'En Revisión'...",
+                        height=85,
+                        help="Espacio para registrar el feedback del usuario y mantener la iteración continua de resolución.",
+                        key=f"txt_comentarios_revision_{tkt_activo['id']}"
+                    )
+
                     if st.button("💾 Guardar Cambios del Ticket", type="primary", use_container_width=True, key=f"btn_guardar_ticket_{tkt_activo['id']}"):
                         try:
                             supabase.rpc("admin_update_reporte_bug", {
                                 "p_id": tkt_activo["id"],
                                 "p_estado": nuevo_est_val,
-                                "p_notas": (notas_resolucion_val or "").strip()
+                                "p_notas": (notas_resolucion_val or "").strip(),
+                                "p_comentarios": (comentarios_revision_val or "").strip()
                             }).execute()
                             st.success(f"✅ Ticket **{tkt_activo['folio']}** actualizado a '{nuevo_est_val}' exitosamente.")
                             time.sleep(1.0)
