@@ -21,12 +21,10 @@ import modulos.biblioteca_engine
 import modulos.dashboard_engine
 import modulos.mediciones_engine
 import modulos.estimaciones_engine
-import modulos.drawer_tracker
 importlib.reload(modulos.db_engine)
 importlib.reload(modulos.auth_engine)
 importlib.reload(modulos.admin_engine)
 importlib.reload(modulos.bug_tracker)
-importlib.reload(modulos.drawer_tracker)
 importlib.reload(modulos.pdf_engine)
 importlib.reload(modulos.personal_engine)
 importlib.reload(modulos.proveedores_engine)
@@ -496,28 +494,6 @@ function hideAndBindTrigger() {
             }
         }
     });
-
-    // 1.1 Neutralizar el bloque del fragment del drawer en el flujo de la página (salto 0.0px exacto)
-    const drawerPanel = doc.querySelector('.st-key-drawer_tracking_panel');
-    if (drawerPanel) {
-        const mainBlock = doc.querySelector('[data-testid="stMainBlockContainer"] > .stVerticalBlock');
-        if (mainBlock) {
-            for (const child of mainBlock.children) {
-                if (child.contains(drawerPanel)) {
-                    if (child.style.position !== 'absolute') {
-                        child.style.position = 'absolute';
-                        child.style.height = '0px';
-                        child.style.width = '0px';
-                        child.style.margin = '0px';
-                        child.style.padding = '0px';
-                        child.style.pointerEvents = 'none';
-                    }
-                    break;
-                }
-            }
-        }
-        drawerPanel.style.setProperty('pointer-events', 'auto', 'important');
-    }
 
     // 2. Vincular los enlaces del sticky-header con sus respectivos botones técnicos
     function bindLink(selector, btnText) {
