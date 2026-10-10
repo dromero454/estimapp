@@ -288,7 +288,7 @@ Sistema integrado de gestión de incidencias, tickets de soporte y bugs del sist
 | `categoria` | `TEXT` | NO | — | — | Clasificación (UI, Cálculos, Storage, etc.). |
 | `descripcion` | `TEXT` | NO | — | — | Narrativa del problema y pasos de reproducción. |
 | `archivos_adjuntos`| `TEXT[]` | SÍ | `'{}'` | — | Rutas relativas de archivos en bucket `bugs`. |
-| `estado` | `TEXT` | NO | `'Abierto'` | — | Estado (`Abierto`, `En Revisión`, `Corregido`, `Validado`). |
+| `estado` | `TEXT` | NO | `'Abierto'` | `CHECK IN ('Abierto', 'En Revisión', 'Corregido', 'Bajo Consideración', 'Validado', 'Descartado')` | Estado del ciclo de vida del ticket. |
 | `notas_resolucion` | `TEXT` | SÍ | `NULL` | — | Explicación técnica de la solución implementada. |
 | `comentarios_revision` | `TEXT` | SÍ | `NULL` | — | Observaciones y feedback del usuario durante iteraciones. |
 | `created_at` | `TIMESTAMPTZ` | NO | `now()` | — | Fecha y hora de creación. |

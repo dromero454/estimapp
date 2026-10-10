@@ -20,6 +20,7 @@ Todo agente o instancia de IA que comience a trabajar en este repositorio **DEBE
 2. **`README.md`**: Contexto general de la plataforma, arquitectura de negocio, relaciones entre entidades y planes de integración de Machine Learning para predicción de viabilidad de costos.
 3. **`data_model_v2.0.md`**: Esquema relacional vivo (13 tablas, 1 vista analítica, 3 buckets de storage y políticas RLS).
 4. **`especificaciones.md`**: Arquitectura técnica modular, 8 tabs de la aplicación y contratos de backend.
+5. **`PROTOCOLO_BUGS.md`**: **Manual mandatorio del ciclo de vida de incidencias**. Define la matriz de 6 estados, el triaje agéntico previo (`Bajo Consideración`), la prohibición estricta de auto-validación, el manejo de Storage (cero huérfanos) y las reglas de estabilidad de la barra lateral Drawer "To-Go".
 
 ---
 
@@ -78,10 +79,11 @@ Al realizar validaciones completas, el agente debe cubrir el flujo de vida compl
 ---
 
 ## 7. Protocolo de Resolución Agéntica de Bugs (Bug Tracker Integrado)
-Cuando el desarrollador indique "resuelve los bugs abiertos", el agente debe:
-1. Consultar `reportes_bugs` donde `estado = 'Abierto'`.
-2. Leer las descripciones, revisar `tabs_afectadas` y descargar las evidencias adjuntas del bucket `bugs`.
-3. Reproducir los fallos y aplicar los parches correspondientes en `app.py` y/o `modulos/`.
-4. Ejecutar pruebas con Playwright para verificar que la solución funcione y no genere regresiones o desestabilice el comportamiento y funcionamiento normal de la aplicación.
-5. Actualizar el registro en `reportes_bugs` pasando el estado a `'Corregido'`, agregando en `notas_resolucion` el resumen técnico del arreglo y actualizando `updated_at`.
+Consulta obligatoria de `./PROTOCOLO_BUGS.md` para reglas exhaustivas, matrices de autoridad y heurísticas. Cuando el desarrollador indique "resuelve los bugs abiertos", el agente DEBE seguir esta secuencia:
+1. **Fase de Triaje Obligatoria (Paso 0)**: Consultar `reportes_bugs` activos (`estado IN ('Abierto', 'En Revisión')`). Si detecta reportes ambiguos, dañinos, anti-patrones o fuera de alcance, proponer pausarlos en `'Bajo Consideración'` al inicio del reporte antes de tocar código.
+2. **Inspección Técnica**: Leer descripciones, revisar `tabs_afectadas` y consultar evidencias adjuntas en el bucket `bugs` (`{folio}/{nombre_archivo}`).
+3. **Reproducción y Parche**: Diagnosticar la causa raíz y aplicar parches en `app.py` y/o `modulos/` preservando las reglas de arquitectura (sección 6).
+4. **Verificación Automatizada E2E**: Ejecutar pruebas con Playwright para verificar que la solución funcione, que no existan regresiones visuales (tabs duplicadas o saltos de layout) y que el flujo sea exitoso.
+5. **Cierre de Ciclo por el Agente**: Actualizar el ticket a `estado = 'Corregido'`, documentar en `notas_resolucion` el resumen técnico y registrar el timestamp `updated_at`. **El agente NUNCA marca tickets como `'Validado'` ni `'Descartado'`; dicha facultad es exclusiva del Superadmin**.
+
 

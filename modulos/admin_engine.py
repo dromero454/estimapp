@@ -755,9 +755,10 @@ def render_admin_dashboard(supabase: Client):
         en_rev = sum(1 for t in tickets_raw if t.get("estado") == "En Revisión")
         corregidos = sum(1 for t in tickets_raw if t.get("estado") == "Corregido")
         validados = sum(1 for t in tickets_raw if t.get("estado") == "Validado")
+        bajo_cons = sum(1 for t in tickets_raw if t.get("estado") == "Bajo Consideración")
         descartados = sum(1 for t in tickets_raw if t.get("estado") == "Descartado")
 
-        m1, m2, m3, m4, m5, m6 = st.columns(6)
+        m1, m2, m3, m4, m5, m6, m7 = st.columns(7)
         with m1:
             st.metric("Total Tickets", total_tkts)
         with m2:
@@ -769,6 +770,8 @@ def render_admin_dashboard(supabase: Client):
         with m5:
             st.metric("🔵 Validados", validados)
         with m6:
+            st.metric("🟠 Bajo Consideración", bajo_cons)
+        with m7:
             st.metric("⚪ Descartados", descartados)
 
         st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
@@ -778,7 +781,7 @@ def render_admin_dashboard(supabase: Client):
         with col_f1:
             filtro_estado = st.selectbox(
                 "Filtrar por Estado:",
-                ["Todos", "Abierto", "En Revisión", "Corregido", "Validado", "Descartado"],
+                ["Todos", "Abierto", "En Revisión", "Corregido", "Validado", "Bajo Consideración", "Descartado"],
                 key="filtro_incidencias_estado"
             )
         with col_f2:
@@ -867,6 +870,7 @@ def render_admin_dashboard(supabase: Client):
                         "En Revisión": "🟡 En Revisión",
                         "Corregido": "🟢 Corregido",
                         "Validado": "🔵 Validado",
+                        "Bajo Consideración": "🟠 Bajo Consideración",
                         "Descartado": "⚪ Descartado",
                     }
                     badge_actual = estado_badges.get(tkt_activo.get("estado"), tkt_activo.get("estado"))
@@ -895,7 +899,7 @@ def render_admin_dashboard(supabase: Client):
                     st.markdown("---")
                     st.markdown("##### ⚙️ Gestión y Resolución Técnica")
 
-                    estados_disponibles = ["Abierto", "En Revisión", "Corregido", "Validado", "Descartado"]
+                    estados_disponibles = ["Abierto", "En Revisión", "Corregido", "Validado", "Bajo Consideración", "Descartado"]
                     curr_est_idx = estados_disponibles.index(tkt_activo["estado"]) if tkt_activo.get("estado") in estados_disponibles else 0
 
                     nuevo_est_val = st.selectbox(

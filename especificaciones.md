@@ -89,7 +89,7 @@ El sistema opera sobre el esquema `public` con **13 tablas relacionales activas*
 10. **`hitos_cobro`**: Cronograma comercial de hitos de facturación y cobro vinculado al proyecto.
 11. **`telemetria_clima`**: Registro de condiciones meteorológicas en campo obtenido vía Open-Meteo (`temp_media_c`, `temp_max_c`, `precipitacion_mm`, `dias_lluvia`, `humedad_relativa_pct`).
 12. **`perfiles`**: Datos ampliados del usuario de Supabase Auth (`nombre`, `apellido_paterno`, `apellido_materno`, `empresa_despacho`, `rol`, `es_admin`).
-13. **`reportes_bugs`**: Bug Tracker integral con folios correlativos (`BUG-XXX`), tabs afectadas, categoría, evidencias adjuntas, estado (`Abierto`, `En Revisión`, `Corregido`, `Validado`) y notas de resolución.
+13. **`reportes_bugs`**: Bug Tracker integral con folios correlativos (`BUG-XXX`), tabs afectadas, categoría, evidencias adjuntas, estado (`Abierto`, `En Revisión`, `Corregido`, `Bajo Consideración`, `Validado`, `Descartado`), notas de resolución y comentarios de revisión. (Ver manual normativo en `./PROTOCOLO_BUGS.md`).
 
 #### Vista Analítica de Machine Learning
 - **`v_telemetria_rendimientos_ml`**: Feature Store SQL unificado que cruza mediciones de campo, factores geográficos, especialidades de catálogo, destajistas asignados y telemetría climática para preparar el entrenamiento de modelos predictivos de rendimientos y costos.
@@ -137,6 +137,7 @@ El sistema opera sobre el esquema `public` con **13 tablas relacionales activas*
 
 ### 4.7 `admin_engine.py` y `bug_tracker.py` (Superadministración e Incidencias)
 - Panel de control para roles `superadmin`: telemetría global, auditoría de tablas, inspección de buckets y gestión del ciclo de vida de tickets de soporte (`reportes_bugs`).
+- **Barra Lateral Derecha (Drawer "To-Go")**: Lista interactiva de trabajo activo para el superadministrador (`Abierto`, `En Revisión`, `Corregido`, `Bajo Consideración`), permitiendo auditar, editar y dar feedback continuo a los agentes mientras navega libremente por la app. (Ver `./PROTOCOLO_BUGS.md`).
 
 ### 4.8 `excel_engine.py` y `pdf_engine.py` (Motores de Exportación)
 - **Excel**: Inyección binaria OpenPyXL en formatos oficiales IMSS, Poder Judicial de la Federación (PJF) y Formato Libre Estimapp, insertando todas las fotografías y croquis en hojas de reporte.

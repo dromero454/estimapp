@@ -162,7 +162,35 @@ box.addEventListener('click', async () => {
 
 // Inicialización de Streamlit
 Streamlit.events.addEventListener(Streamlit.RENDER_EVENT, function(event) {
-  Streamlit.setFrameHeight(98.4);
+  const isCompact = event.detail && event.detail.args && event.detail.args.compact;
+  const subtitle = document.querySelector('.paste-subtitle');
+  const titleEl = document.querySelector('.paste-title');
+  const box = document.getElementById('pasteBox');
+  if (isCompact) {
+    if (subtitle) subtitle.style.display = 'none';
+    if (titleEl) {
+      titleEl.innerHTML = '<span class="icon">📋</span> Pegar captura';
+      titleEl.style.fontSize = '0.80rem';
+    }
+    if (box) {
+      box.style.height = '48px';
+      box.style.minHeight = '48px';
+      box.style.padding = '4px 6px';
+    }
+    Streamlit.setFrameHeight(48);
+  } else {
+    if (subtitle) subtitle.style.display = 'flex';
+    if (titleEl) {
+      titleEl.innerHTML = '<span class="icon">📋</span> Copia tus screenshots aquí:';
+      titleEl.style.fontSize = '0.88rem';
+    }
+    if (box) {
+      box.style.height = '98.4px';
+      box.style.minHeight = '98.4px';
+      box.style.padding = '10px 14px';
+    }
+    Streamlit.setFrameHeight(98.4);
+  }
 });
 Streamlit.setComponentReady();
 Streamlit.setFrameHeight(98.4);

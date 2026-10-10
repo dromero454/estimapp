@@ -37,7 +37,7 @@ importlib.reload(modulos.estimaciones_engine)
 
 from modulos.auth_engine import render_login_card, render_user_profile_dialog
 from modulos.admin_engine import render_admin_dashboard
-from modulos.bug_tracker import render_bug_report_dialog, limpiar_estado_bug
+from modulos.bug_tracker import render_bug_report_dialog, render_bug_tracking_drawer, limpiar_estado_bug
 from modulos.dashboard_engine import render_dashboard_tab
 from modulos.mediciones_engine import render_mediciones_tab
 from modulos.estimaciones_engine import render_estimaciones_tab
@@ -266,6 +266,29 @@ button[data-baseweb="tab"], button[data-baseweb="tab"] p, button[data-baseweb="t
     text-decoration: none !important;
 }
 
+.tracking-link {
+    color: #854d0e !important;
+    text-decoration: none !important;
+    font-weight: 600;
+    font-size: 0.78rem;
+    background: #fef9c3;
+    padding: 2px 7px;
+    border-radius: 4px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    border: 1px solid #fde047;
+    transition: all 0.15s ease;
+    cursor: pointer;
+}
+
+.tracking-link:hover {
+    background-color: #fef08a !important;
+    border-color: #facc15 !important;
+    color: #713f12 !important;
+    text-decoration: none !important;
+}
+
 /* Ocultar disparadores técnicos del diálogo de perfil, consola admin y reporte de bugs */
 div[data-testid="stElementContainer"]:has(#btn-trigger-mi-perfil-anchor),
 div[data-testid="stElementContainer"]:has(button[key="btn_trigger_mi_perfil"]),
@@ -287,6 +310,33 @@ div[data-testid="stElementContainer"]:has(iframe[title="streamlit.components.v1.
     border: none !important;
     margin: 0 !important;
     padding: 0 !important;
+}
+
+/* Transición suave global de la aplicación principal al abrir o cerrar paneles laterales */
+[data-testid="stMain"], .stMain {
+    transition: margin-right 0.25s cubic-bezier(0.16, 1, 0.3, 1), max-width 0.25s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+[data-testid="stMain"] [data-testid="stMainBlockContainer"] {
+    transition: padding-right 0.25s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+
+/* Blindaje permanente para que el panel lateral Drawer NUNCA renderice inline en el flujo de la página */
+.st-key-drawer_tracking_panel {
+    position: fixed !important;
+    top: 0 !important;
+    right: 0 !important;
+    width: 400px !important;
+    max-width: 95vw !important;
+    height: 100vh !important;
+    min-height: 100vh !important;
+    background: #ffffff !important;
+    box-shadow: -8px 0 32px rgba(15, 23, 42, 0.22) !important;
+    z-index: 999990 !important;
+    overflow-y: auto !important;
+    border-left: 1px solid #cbd5e1 !important;
+    padding: 18px 16px 45px 16px !important;
+    box-sizing: border-box !important;
+    transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.25s ease !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -338,8 +388,10 @@ if "vista_actual" not in st.session_state:
     st.session_state["vista_actual"] = "obra"
 
 admin_link_html = ""
+tracking_link_html = ""
 if es_admin_usr:
     admin_link_html = '<div style="margin-top: 4px;"><a href="javascript:void(0)" class="admin-link" title="Consola de Superadministrador">🛡️ Consola Administrador</a></div>'
+    tracking_link_html = '<div style="margin-top: 4px;"><a href="javascript:void(0)" class="tracking-link" title="Seguimiento e Iteración de Incidencias">🐞 Seguimiento de bugs</a></div>'
 
 bug_link_html = '<div style="margin-top: 4px;"><a href="javascript:void(0)" class="bug-link" title="Reportar un problema o sugerencia">🐞 ¿Tienes un problema?</a></div>'
 
@@ -371,6 +423,7 @@ Control de avance físico y financiero de obra pública y privada
 <div style='font-size: 0.8rem; color: #64748b;'>{email_usr}</div>
 {admin_link_html}
 {bug_link_html}
+{tracking_link_html}
 </div>
 <a href="?logout=1" target="_self" class="btn-salir-link">Salir</a>
 </div>
@@ -394,6 +447,12 @@ if st.button("Reportar Problema", key="btn_trigger_reportar_bug"):
     limpiar_estado_bug()
     st.session_state["mostrar_dialogo_bug"] = True
 
+# Disparador en segundo plano para alternar el drawer de seguimiento de bugs
+def _cb_toggle_tracking_drawer():
+    st.session_state["mostrar_drawer_tracking"] = not st.session_state.get("mostrar_drawer_tracking", False)
+
+st.button("Alternar Drawer Tracking", key="btn_trigger_tracking_drawer", on_click=_cb_toggle_tracking_drawer)
+
 import streamlit.components.v1 as components
 components.html("""
 <script>
@@ -409,7 +468,7 @@ function hideAndBindTrigger() {
     }
 
     // 1. Ocultar los contenedores de los botones técnicos
-    ['Abrir Perfil', 'Alternar Consola Admin', 'Reportar Problema'].forEach(txt => {
+    ['Abrir Perfil', 'Alternar Consola Admin', 'Reportar Problema', 'Alternar Drawer Tracking'].forEach(txt => {
         const btn = Array.from(doc.querySelectorAll('button')).find(b => b.innerText.includes(txt));
         if (btn) {
             const container = btn.closest('div[data-testid="stElementContainer"]');
@@ -460,6 +519,43 @@ function hideAndBindTrigger() {
             }
         });
     }
+
+    // 5. Vincular el enlace de seguimiento de problemas en el sticky-header
+    const trackingLink = doc.querySelector('.sticky-header .tracking-link');
+    if (trackingLink && !trackingLink.dataset.bound) {
+        trackingLink.dataset.bound = "true";
+        trackingLink.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const b = Array.from(doc.querySelectorAll('button')).find(btn => btn.innerText.includes('Alternar Drawer Tracking'));
+            if (b) {
+                b.click();
+            }
+        });
+    }
+
+    // 6. Transición suave de salida (Slide-Out) del drawer al pulsar en Cerrar o Cancelar
+    if (!doc.dataset.drawerCloseBound) {
+        doc.dataset.drawerCloseBound = "true";
+        doc.addEventListener('click', (e) => {
+            const target = e.target;
+            if (!target) return;
+            const isClose = target.closest('.st-key-btn_drawer_close_top') || 
+                            target.closest('[class*="btn_drawer_cancel_"]');
+            if (isClose) {
+                const panel = doc.querySelector('.st-key-drawer_tracking_panel');
+                if (panel) {
+                    panel.style.setProperty('transform', 'translateX(100%)', 'important');
+                    panel.style.setProperty('box-shadow', 'none', 'important');
+                }
+                const main = doc.querySelector('[data-testid="stMain"], .stMain');
+                if (main) {
+                    main.style.setProperty('margin-right', '0px', 'important');
+                    main.style.setProperty('max-width', '100%', 'important');
+                }
+            }
+        }, true);
+    }
 }
 hideAndBindTrigger();
 setInterval(hideAndBindTrigger, 200);
@@ -476,72 +572,83 @@ if st.session_state.get("mostrar_dialogo_bug"):
     render_bug_report_dialog(supabase, st.session_state["user"])
 
 # =============================================================
-# CONMUTACIÓN DE VISTAS: CONSOLA DE ADMINISTRADOR
+# CONMUTACIÓN DE VISTAS: CONSOLA DE ADMINISTRADOR O PESTAÑAS DE OBRA
 # =============================================================
 if st.session_state.get("vista_actual") == "admin" and es_admin_usr:
     render_admin_dashboard(supabase)
-    st.stop()
+else:
+    # Generador de nombres dinámicos para evitar caché en descargas Excel
+    ts_descarga = int(datetime.datetime.now().timestamp())
 
-# Generador de nombres dinámicos para evitar caché en descargas Excel
-ts_descarga = int(datetime.datetime.now().timestamp())
+    # -------------------------------------------------------------
+    # INTERFAZ PRINCIPAL (8 PESTAÑAS UNIVERSALES)
+    # -------------------------------------------------------------
+    LISTA_TABS_OBRA = [
+        "📊 Resumen Financiero", "📐 Captura en Campo", "📑 Estimaciones y Raya", 
+        "📚 Catálogo del Proyecto", "📖 Biblioteca Maestra", "👷 Personal y Cuadrillas",
+        "🚚 Proveedores", "🏢 Proyectos"
+    ]
+
+    tab_dashboard, tab_captura, tab_estimaciones, tab_catalogo, tab_biblioteca, tab_personal, tab_proveedores, tab_proyectos = st.tabs(
+        LISTA_TABS_OBRA,
+        key="tab_obra_activa"
+    )
+
+    lista_proyectos = get_proyectos(user_id)
+    proyectos_dict = {p["nombre_obra"]: p["id"] for p in lista_proyectos} if lista_proyectos else {}
+
+    # -------------------------------------------------------------
+    # TAB 1: CONTROL PRESUPUESTAL (DASHBOARD)
+    # -------------------------------------------------------------
+    with tab_dashboard:
+        render_dashboard_tab(supabase, user_id, lista_proyectos, get_conceptos, get_estimaciones, get_mediciones)
+
+    # -------------------------------------------------------------
+    # TAB 2: CAPTURA EN CAMPO
+    # -------------------------------------------------------------
+    with tab_captura:
+        render_mediciones_tab(supabase, user_id, lista_proyectos, get_estimaciones, get_conceptos, get_mediciones)
+
+    # -------------------------------------------------------------
+    # TAB 3: ESTIMACIONES Y RAYA
+    # -------------------------------------------------------------
+    with tab_estimaciones:
+        render_estimaciones_tab(supabase, user_id, lista_proyectos, get_estimaciones, get_conceptos, get_mediciones)
+
+    # -------------------------------------------------------------
+    # TAB 4: CATÁLOGO DEL PROYECTO
+    # -------------------------------------------------------------
+    with tab_catalogo:
+        render_catalogo_tab(supabase, user_id, lista_proyectos, get_conceptos)
+
+    # -------------------------------------------------------------
+    # TAB 5: BIBLIOTECA MAESTRA GLOBAL
+    # -------------------------------------------------------------
+    with tab_biblioteca:
+        render_biblioteca_tab(supabase, user_id)
+
+    # -------------------------------------------------------------
+    # TAB 6: PERSONAL Y CUADRILLAS
+    # -------------------------------------------------------------
+    with tab_personal:
+        render_personal_tab(supabase, user_id)
+
+    # -------------------------------------------------------------
+    # TAB 7: PROVEEDORES COMERCIALES
+    # -------------------------------------------------------------
+    with tab_proveedores:
+        render_proveedores_tab(supabase, user_id)
+
+    # -------------------------------------------------------------
+    # TAB 8: GESTIÓN DE PROYECTOS Y GEORREFERENCIACIÓN
+    # -------------------------------------------------------------
+    with tab_proyectos:
+        render_proyectos_tab(supabase, user_id, lista_proyectos, get_proyectos)
 
 # =============================================================
-# INTERFAZ PRINCIPAL (8 PESTAÑAS UNIVERSALES)
+# BARRA LATERAL DERECHA (DRAWER TO-GO) DE SEGUIMIENTO DE BUGS
 # =============================================================
-tab_dashboard, tab_captura, tab_estimaciones, tab_catalogo, tab_biblioteca, tab_personal, tab_proveedores, tab_proyectos = st.tabs([
-    "📊 Resumen Financiero", "📐 Captura en Campo", "📑 Estimaciones y Raya", 
-    "📚 Catálogo del Proyecto", "📖 Biblioteca Maestra", "👷 Personal y Cuadrillas",
-    "🚚 Proveedores", "🏢 Proyectos"
-])
-
-lista_proyectos = get_proyectos(user_id)
-proyectos_dict = {p["nombre_obra"]: p["id"] for p in lista_proyectos} if lista_proyectos else {}
-
-# -------------------------------------------------------------
-# TAB 1: CONTROL PRESUPUESTAL (DASHBOARD)
-# -------------------------------------------------------------
-with tab_dashboard:
-    render_dashboard_tab(supabase, user_id, lista_proyectos, get_conceptos, get_estimaciones, get_mediciones)
-
-# -------------------------------------------------------------
-# TAB 2: CAPTURA EN CAMPO
-# -------------------------------------------------------------
-with tab_captura:
-    render_mediciones_tab(supabase, user_id, lista_proyectos, get_estimaciones, get_conceptos, get_mediciones)
-
-# -------------------------------------------------------------
-# TAB 3: ESTIMACIONES Y RAYA
-# -------------------------------------------------------------
-with tab_estimaciones:
-    render_estimaciones_tab(supabase, user_id, lista_proyectos, get_estimaciones, get_conceptos, get_mediciones)
-
-# -------------------------------------------------------------
-# TAB 4: CATÁLOGO DEL PROYECTO
-# -------------------------------------------------------------
-with tab_catalogo:
-    render_catalogo_tab(supabase, user_id, lista_proyectos, get_conceptos)
-
-# -------------------------------------------------------------
-# TAB 5: BIBLIOTECA MAESTRA GLOBAL
-# -------------------------------------------------------------
-with tab_biblioteca:
-    render_biblioteca_tab(supabase, user_id)
-
-
-# -------------------------------------------------------------
-# TAB 6: PERSONAL Y CUADRILLAS
-# -------------------------------------------------------------
-with tab_personal:
-    render_personal_tab(supabase, user_id)
-
-# -------------------------------------------------------------
-# TAB 7: PROVEEDORES COMERCIALES
-# -------------------------------------------------------------
-with tab_proveedores:
-    render_proveedores_tab(supabase, user_id)
-
-# -------------------------------------------------------------
-# TAB 8: GESTIÓN DE PROYECTOS Y GEORREFERENCIACIÓN
-# -------------------------------------------------------------
-with tab_proyectos:
-    render_proyectos_tab(supabase, user_id, lista_proyectos, get_proyectos)
+# Renderizado al final de la página para que la jerarquía y deltas de las 8 pestañas
+# permanezcan 100% estables, eliminando por completo cualquier parpadeo o duplicación.
+if es_admin_usr and st.session_state.get("mostrar_drawer_tracking"):
+    render_bug_tracking_drawer(supabase, st.session_state["user"], st.session_state.get("perfil", {}))
