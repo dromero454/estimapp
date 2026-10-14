@@ -247,20 +247,61 @@ def render_dashboard_tab(supabase, user_id: str, lista_proyectos: list, get_conc
             strokeWidth=0
         )
 
-    # DataFrame de distribución de costos
-    df_dist = pd.DataFrame({
-        "Rubro": ["Materiales", "Mano de Obra / Destajos", "Herramienta y Equipo", "Gastos Indirectos", "Margen de Utilidad"],
-        "Importe": [
-            max(0.0, costo_materiales_erogado),
-            max(0.0, total_destajos_pagados),
-            max(0.0, costo_herramienta_erogado),
-            max(0.0, costo_indirectos_erogado),
-            max(0.0, utilidad_bruta_real)
-        ]
-    })
-    total_dist = df_dist["Importe"].sum()
-    df_dist["Porcentaje"] = (df_dist["Importe"] / total_dist * 100.0).round(1) if total_dist > 0 else 0.0
-    df_dist["Participacion"] = df_dist["Porcentaje"].apply(lambda p: f"{p:.1f}%")
+    # Helper para calcular la distribución de costos por periodo o acumulada (BUG-013)
+    def _calcular_df_distribucion(sel_filtro):
+        if sel_filtro == "Total Acumulado" or not estimaciones_dash:
+            c_mat = max(0.0, costo_materiales_erogado)
+            c_mo = max(0.0, total_destajos_pagados)
+            c_herr = max(0.0, costo_herramienta_erogado)
+            c_ind = max(0.0, costo_indirectos_erogado)
+            c_util = max(0.0, utilidad_bruta_real)
+        else:
+            num_p = int(sel_filtro.replace("Estimación #", "").strip())
+            est_obj = next((e for e in estimaciones_dash if e["num_periodo"] == num_p), None)
+            if est_obj:
+                meds_p = get_mediciones(est_obj["id"])
+                c_mat = 0.0
+                c_mo = 0.0
+                c_herr = 0.0
+                c_ind = 0.0
+                monto_est_p = 0.0
+                for m in meds_p:
+                    c_id = m.get("id_concepto")
+                    cant = float(m.get("cantidad_total") or 0.0)
+                    if c_id in dict_conceptos_info:
+                        c_info = dict_conceptos_info[c_id]
+                        pu = float(c_info.get("precio_unitario") or 0.0)
+                        monto_est_p += (cant * pu)
+                        c_mat += (cant * float(c_info.get("costo_material") or 0.0))
+                        c_herr += (cant * float(c_info.get("costo_herramienta") or 0.0))
+                        c_ind += (cant * float(c_info.get("costo_indirecto") or 0.0))
+                        
+                        p_info = m.get("personal_obra")
+                        if m.get("id_personal") and p_info:
+                            p_mod = p_info.get("modalidad_pago") or "Por Destajo"
+                            if p_mod == "Por Jornada":
+                                c_mo += (float(m.get("horas_o_jornales") or 1.0) * float(p_info.get("costo_jornal_base") or 0.0))
+                            else:
+                                c_mo += (cant * float(c_info.get("costo_mano_obra") or 0.0))
+                        else:
+                            c_mo += (cant * float(c_info.get("costo_mano_obra") or 0.0))
+
+                gasto_erog_p = c_mat + c_mo + c_herr + c_ind
+                c_util = round(max(0.0, monto_est_p - gasto_erog_p), 2) if gasto_erog_p > 0 else 0.0
+            else:
+                c_mat, c_mo, c_herr, c_ind, c_util = 0.0, 0.0, 0.0, 0.0, 0.0
+
+        df_res = pd.DataFrame({
+            "Rubro": ["Materiales", "Mano de Obra / Destajos", "Herramienta y Equipo", "Gastos Indirectos", "Margen de Utilidad"],
+            "Importe": [max(0.0, c_mat), max(0.0, c_mo), max(0.0, c_herr), max(0.0, c_ind), max(0.0, c_util)]
+        })
+        t_dist = df_res["Importe"].sum()
+        df_res["Porcentaje"] = (df_res["Importe"] / t_dist * 100.0).round(1) if t_dist > 0 else 0.0
+        df_res["Participacion"] = df_res["Porcentaje"].apply(lambda p: f"{p:.1f}%")
+        return df_res
+
+    # Distribución global inicial
+    df_dist = _calcular_df_distribucion("Total Acumulado")
 
     # =============================================================
     # RENDERIZADO ADAPTATIVO SEGÚN MODALIDAD
@@ -278,12 +319,15 @@ def render_dashboard_tab(supabase, user_id: str, lista_proyectos: list, get_conc
     elif modalidad_proy == "privada":
         # ---------------- MODO OBRA PRIVADA (RENTABILIDAD INTERNA) ----------------
         with st.container(border=True):
-            kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-            kpi1.metric("Presupuesto Pactado Cliente", f"${monto_contratado_total:,.2f}")
-            kpi2.metric("Gasto Erogado Real (Obras/Compras)", f"${gasto_erogado_real:,.2f}", delta=f"-${gasto_erogado_real:,.2f}", delta_color="inverse")
-            kpi3.metric("Utilidad Bruta Real Erogada", f"${utilidad_bruta_real:,.2f}", delta=f"${utilidad_bruta_real:,.2f}")
-            kpi4.metric("Margen Real del Despacho", f"{pct_margen_real:.1f}%")
+            st.markdown("##### 🏛️ Resumen Global del Proyecto")
+            kpi1, kpi_rep, kpi2, kpi3, kpi4 = st.columns(5)
+            kpi1.metric("Presupuesto Pactado", f"${monto_contratado_total:,.2f}")
+            kpi_rep.metric("Gasto Reportable", f"${monto_estimado_global:,.2f}", help="Total acumulado cobrable al cliente amparado en las estimaciones abiertas con utilidad.")
+            kpi2.metric("Gasto Erogado Real", f"${gasto_erogado_real:,.2f}", delta=f"-${gasto_erogado_real:,.2f}" if gasto_erogado_real > 0 else None, delta_color="inverse")
+            kpi3.metric("Utilidad Bruta Real", f"${utilidad_bruta_real:,.2f}", delta=f"${utilidad_bruta_real:,.2f}" if utilidad_bruta_real > 0 else None)
+            kpi4.metric("Margen Real", f"{pct_margen_real:.1f}%")
 
+            st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
             if proy_mo_presupuestada > 0:
                 ratio_mo = total_destajos_pagados / proy_mo_presupuestada
                 if total_destajos_pagados > proy_mo_presupuestada:
@@ -298,19 +342,31 @@ def render_dashboard_tab(supabase, user_id: str, lista_proyectos: list, get_conc
 
         st.markdown("<div style='height: 4px;'></div>", unsafe_allow_html=True)
         with st.container(border=True):
-            st.markdown("##### 📊 Distribución de Costos y Margen del Despacho:")
+            col_dh, col_df = st.columns([1.6, 1.2])
+            with col_dh:
+                st.markdown("##### 📊 Distribución de Costos y Margen del Despacho:")
+            with col_df:
+                opciones_filtro_dona = ["Total Acumulado"] + [f"Estimación #{e['num_periodo']}" for e in estimaciones_dash]
+                sel_filtro_dona = st.selectbox(
+                    "Filtrar distribución:",
+                    options=opciones_filtro_dona,
+                    key="dash_filtro_dona_priv",
+                    label_visibility="collapsed"
+                )
+
+            df_dist_plot = _calcular_df_distribucion(sel_filtro_dona)
             col_chart, col_legend_table = st.columns([1.3, 1])
             with col_chart:
-                chart_obj = _crear_grafica_dona(df_dist)
+                chart_obj = _crear_grafica_dona(df_dist_plot)
                 if chart_obj:
                     st.altair_chart(chart_obj, use_container_width=True)
                 else:
                     st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
-                    st.info("💡 **Este proyecto no cuenta con desglose analítico (APUs) en su catálogo ni destajistas asignados en campo.**\n\nRegistra estos costos para ver la distribución real.")
+                    st.info("💡 **Este periodo no cuenta con desglose analítico (APUs) en su catálogo ni destajistas asignados en campo.**\n\nRegistra estos costos para ver la distribución real.")
             with col_legend_table:
                 st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
                 st.dataframe(
-                    df_dist[["Rubro", "Importe", "Porcentaje"]],
+                    df_dist_plot[["Rubro", "Importe", "Porcentaje"]],
                     column_config={
                         "Rubro": st.column_config.TextColumn("Rubro", width=160),
                         "Importe": st.column_config.NumberColumn("Importe", format="$%,.2f", width=120),
@@ -395,19 +451,31 @@ def render_dashboard_tab(supabase, user_id: str, lista_proyectos: list, get_conc
 
         st.markdown("<div style='height: 4px;'></div>", unsafe_allow_html=True)
         with st.container(border=True):
-            st.markdown("##### 📊 Distribución de Costos Erogados y Margen de Utilidad:")
+            col_dh_m, col_df_m = st.columns([1.6, 1.2])
+            with col_dh_m:
+                st.markdown("##### 📊 Distribución de Costos y Margen del Despacho:")
+            with col_df_m:
+                opciones_filtro_dona_m = ["Total Acumulado"] + [f"Estimación #{e['num_periodo']}" for e in estimaciones_dash]
+                sel_filtro_dona_m = st.selectbox(
+                    "Filtrar distribución:",
+                    options=opciones_filtro_dona_m,
+                    key="dash_filtro_dona_mixta",
+                    label_visibility="collapsed"
+                )
+
+            df_dist_plot_m = _calcular_df_distribucion(sel_filtro_dona_m)
             col_chart, col_legend_table = st.columns([1.3, 1])
             with col_chart:
-                chart_obj = _crear_grafica_dona(df_dist)
+                chart_obj = _crear_grafica_dona(df_dist_plot_m)
                 if chart_obj:
                     st.altair_chart(chart_obj, use_container_width=True)
                 else:
                     st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
-                    st.info("💡 **Este proyecto no cuenta con desglose analítico (APUs) en su catálogo ni destajistas asignados en campo.**\n\nRegistra estos costos para ver la distribución real.")
+                    st.info("💡 **Este periodo no cuenta con desglose analítico (APUs) en su catálogo ni destajistas asignados en campo.**\n\nRegistra estos costos para ver la distribución real.")
             with col_legend_table:
                 st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
                 st.dataframe(
-                    df_dist[["Rubro", "Importe", "Porcentaje"]],
+                    df_dist_plot_m[["Rubro", "Importe", "Porcentaje"]],
                     column_config={
                         "Rubro": st.column_config.TextColumn("Rubro", width=160),
                         "Importe": st.column_config.NumberColumn("Importe", format="$%,.2f", width=120),

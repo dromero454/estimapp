@@ -23,7 +23,7 @@ def render_personal_tab(supabase: Client, user_id: str):
     Permite el registro, edición de jornales base y gestión de destajistas.
     """
     st.markdown("### Directorio de Personal y Cuadrillas 👷")
-    st.caption("Control centralizado de trabajadores, destajistas y cuadrillas de obra con tarifas base por jornal para nómina y raya.")
+    st.caption("Control centralizado de trabajadores, destajistas y cuadrillas de obra con modalidades por destajo o por jornada.")
 
     # Contador de versión para reseteo limpio de formularios
     if "personal_form_counter" not in st.session_state:
@@ -34,6 +34,8 @@ def render_personal_tab(supabase: Client, user_id: str):
         st.session_state["ed_personal_counter"] = 0
 
     col_alta, col_baja = st.columns([1, 1])
+
+    MODALIDADES_LIST = ["Por Destajo", "Por Jornada"]
 
     # -------------------------------------------------------------
     # SECCIÓN 1: FORMULARIO DE ALTA RÁPIDA
@@ -47,7 +49,15 @@ def render_personal_tab(supabase: Client, user_id: str):
                     key=f"pers_nombre_{p_counter}"
                 )
 
-                c_esp, c_jor = st.columns(2)
+                c_mod, c_esp = st.columns(2)
+                with c_mod:
+                    modalidad = st.selectbox(
+                        "Modalidad de Pago *",
+                        options=MODALIDADES_LIST,
+                        index=0,
+                        key=f"pers_modalidad_{p_counter}",
+                        help="Por Destajo: Remuneración calculada por volumen medido y costo de mano de obra en APU. Por Jornada: Sueldo diario por día laborado."
+                    )
                 with c_esp:
                     especialidad = st.selectbox(
                         "Especialidad / Oficio *",
@@ -55,22 +65,24 @@ def render_personal_tab(supabase: Client, user_id: str):
                         index=0,
                         key=f"pers_especialidad_{p_counter}"
                     )
+
+                c_jor, c_tel = st.columns(2)
                 with c_jor:
                     costo_jornal = st.number_input(
-                        "Costo Jornal Base ($) *",
+                        "Tarifa por Jornada ($)",
                         min_value=0.0,
                         value=500.0,
                         step=50.0,
                         format="%.2f",
                         key=f"pers_jornal_{p_counter}",
-                        help="Tarifa de referencia diaria para cálculo de liquidación de raya."
+                        help="Tarifa de referencia diaria (aplica cuando labora bajo esquema de jornada fija)."
                     )
-
-                telefono = st.text_input(
-                    "Teléfono de contacto / WhatsApp",
-                    placeholder="Ej: 312 123 4567",
-                    key=f"pers_telefono_{p_counter}"
-                )
+                with c_tel:
+                    telefono = st.text_input(
+                        "Teléfono de contacto / WhatsApp",
+                        placeholder="Ej: 312 123 4567",
+                        key=f"pers_telefono_{p_counter}"
+                    )
 
                 btn_guardar_pers = st.form_submit_button("Guardar Trabajador", type="primary", use_container_width=True)
 
@@ -82,13 +94,14 @@ def render_personal_tab(supabase: Client, user_id: str):
                             supabase.table("personal_obra").insert({
                                 "user_id": user_id,
                                 "nombre": nombre.strip(),
+                                "modalidad_pago": modalidad,
                                 "especialidad": especialidad,
                                 "costo_jornal_base": round(float(costo_jornal), 2),
                                 "telefono": telefono.strip() if telefono else None
                             }).execute()
 
                             st.session_state["personal_form_counter"] += 1
-                            st.success(f"✅ Trabajador '{nombre.strip()}' registrado exitosamente.")
+                            st.success(f"✅ Trabajador '{nombre.strip()}' registrado exitosamente ({modalidad}).")
                             st.rerun()
                         except Exception as ex:
                             st.error(f"Error al registrar trabajador: {ex}")
@@ -98,7 +111,7 @@ def render_personal_tab(supabase: Client, user_id: str):
     # -------------------------------------------------------------
     try:
         res_pers = supabase.table("personal_obra")\
-            .select("id, nombre, especialidad, costo_jornal_base, telefono, created_at")\
+            .select("id, nombre, modalidad_pago, especialidad, costo_jornal_base, telefono, created_at")\
             .eq("user_id", user_id)\
             .order("id")\
             .execute()
@@ -108,7 +121,7 @@ def render_personal_tab(supabase: Client, user_id: str):
         personal_list = []
 
     # -------------------------------------------------------------
-    # SECCIÓN 3: DAR DE BAJA TRABAJADOR (DEFENSIVO)
+    # SECCIÓN 3: DAR DE BAJA TRABAJADOR (DEFENSIVO - CONSECUTIVOS)
     # -------------------------------------------------------------
     with col_baja:
         with st.expander("🗑️ Dar de Baja Trabajador", expanded=False):
@@ -116,15 +129,15 @@ def render_personal_tab(supabase: Client, user_id: str):
                 st.info("No hay trabajadores registrados para dar de baja.")
             else:
                 pers_dict_del = {
-                    f"#{p['id']} — {p['nombre']} ({p.get('especialidad', 'Oficio')})": p["id"]
-                    for p in personal_list
+                    f"#{idx} — {p['nombre']} ({p.get('modalidad_pago', 'Por Destajo')} - {p.get('especialidad', 'Oficio')})": p["id"]
+                    for idx, p in enumerate(personal_list, 1)
                 }
                 pers_sel_del = st.selectbox(
                     "Seleccionar trabajador a dar de baja:",
                     options=list(pers_dict_del.keys()),
                     key=f"del_pers_sel_{p_counter}"
                 )
-                st.caption("ℹ️ *Los generadores y mediciones de avance pasados se conservan intactos sin perder importes ni datos contables (ON DELETE SET NULL).*")
+                st.caption("ℹ️ *Las mediciones y generadores pasados donde haya participado este trabajador conservarán íntegros sus importes y registros históricos.*")
                 
                 chk_del = st.checkbox(
                     "Confirmo la baja de este trabajador",
@@ -188,7 +201,7 @@ def render_personal_tab(supabase: Client, user_id: str):
         filtrados = [p for p in filtrados if p.get("especialidad") == filtro_esp]
 
     st.markdown("##### Directorio Activo de Cuadrillas y Destajistas")
-    st.caption("💡 *Edita directamente las celdas de tarifa ($/jornal), especialidad o teléfono. Los cambios se guardan automáticamente.*")
+    st.caption("💡 *Edita directamente las celdas de modalidad, tarifa ($/jornada), especialidad o teléfono. Los cambios se guardan automáticamente.*")
 
     if not filtrados:
         st.info("No se encontraron trabajadores que coincidan con los criterios de búsqueda.")
@@ -196,10 +209,11 @@ def render_personal_tab(supabase: Client, user_id: str):
 
     df_pers = pd.DataFrame(filtrados)
     df_pers.insert(0, "#", range(1, len(df_pers) + 1))
+    df_pers["modalidad_pago"] = df_pers["modalidad_pago"].fillna("Por Destajo").astype(str)
     df_pers["costo_jornal_base"] = pd.to_numeric(df_pers["costo_jornal_base"], errors="coerce").fillna(0.0).round(2)
     df_pers["telefono"] = df_pers["telefono"].fillna("").astype(str)
 
-    cols_ed = ["#", "nombre", "especialidad", "costo_jornal_base", "telefono"]
+    cols_ed = ["#", "nombre", "modalidad_pago", "especialidad", "costo_jornal_base", "telefono"]
     ed_pers_key = f"editor_personal_{st.session_state['ed_personal_counter']}"
 
     edited_df = st.data_editor(
@@ -207,8 +221,9 @@ def render_personal_tab(supabase: Client, user_id: str):
         column_config={
             "#": st.column_config.NumberColumn("#", disabled=True),
             "nombre": st.column_config.TextColumn("Nombre Completo", required=True),
+            "modalidad_pago": st.column_config.SelectboxColumn("Modalidad de Pago", options=MODALIDADES_LIST, required=True),
             "especialidad": st.column_config.SelectboxColumn("Especialidad / Oficio", options=ESPECIALIDADES_LIST, required=True),
-            "costo_jornal_base": st.column_config.NumberColumn("Costo Jornal ($)", format="$%.2f", min_value=0.0, step=25.0, required=True),
+            "costo_jornal_base": st.column_config.NumberColumn("Tarifa por Jornada ($)", format="$%.2f", min_value=0.0, step=25.0, required=True),
             "telefono": st.column_config.TextColumn("Teléfono / WhatsApp")
         },
         use_container_width=True,
@@ -239,6 +254,9 @@ def render_personal_tab(supabase: Client, user_id: str):
                     error_guardado = "El nombre del trabajador no puede quedar vacío."
                     break
                 up_payload["nombre"] = str(v_nom).strip()
+
+            if "modalidad_pago" in col_vals:
+                up_payload["modalidad_pago"] = str(col_vals["modalidad_pago"])
 
             if "especialidad" in col_vals:
                 up_payload["especialidad"] = str(col_vals["especialidad"])

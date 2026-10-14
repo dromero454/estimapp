@@ -25,7 +25,7 @@ PESTANAS_MODULOS = [
     "Resumen Financiero",
     "Control Presupuestal",
     "Captura en Campo",
-    "Estimaciones y Raya",
+    "Estimaciones y Pagos",
     "Estimaciones",
     "Catálogo del Proyecto",
     "Biblioteca Maestra",
@@ -39,6 +39,7 @@ PESTANAS_MODULOS = [
 CATEGORIAS_BUGS = [
     "Interfaz y Visualización",
     "Cálculos y Fórmulas",
+    "Importación de Archivos",
     "Exportación de Archivos",
     "Persistencia y Guardado",
     "Rendimiento",

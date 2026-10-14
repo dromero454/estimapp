@@ -100,7 +100,7 @@ def get_estimaciones(id_proyecto: int):
 def get_mediciones(id_estimacion: int):
     supabase = st.session_state["supabase_client"]
     res = supabase.table("mediciones_campo").select(
-        "id, localizacion, eje, tramo, largo, ancho, alto, piezas, cantidad_total, url_foto, url_croquis, id_concepto, id_personal, horas_o_jornales, catalogo_conceptos(clave, unidad, precio_unitario), personal_obra(nombre, especialidad, costo_jornal_base)"
+        "id, localizacion, eje, tramo, largo, ancho, alto, piezas, cantidad_total, url_foto, url_croquis, id_concepto, id_personal, horas_o_jornales, catalogo_conceptos(clave, descripcion, unidad, precio_unitario, costo_mano_obra), personal_obra(id, nombre, modalidad_pago, especialidad, costo_jornal_base)"
     ).eq("id_estimacion", id_estimacion).order("id").execute()
     return res.data or []
 
@@ -172,6 +172,15 @@ def procesar_excel_importacion(df: pd.DataFrame, tipo="proyecto", pct_utilidad_d
     if faltantes:
         return False, f"Columnas obligatorias faltantes en el Excel: {', '.join(faltantes)}", []
 
+    def _safe_float(val, default=0.0) -> float:
+        if val is None or pd.isna(val):
+            return default
+        try:
+            f = float(val)
+            return default if pd.isna(f) else f
+        except (ValueError, TypeError):
+            return default
+
     records = []
     for _, row in df.iterrows():
         clave = str(row[c_clave]).strip() if c_clave and not pd.isna(row[c_clave]) else ""
@@ -179,16 +188,16 @@ def procesar_excel_importacion(df: pd.DataFrame, tipo="proyecto", pct_utilidad_d
         if not clave or clave.lower() == "nan" or not desc or desc.lower() == "nan":
             continue
         
-        u = normalizar_unidad(str(row[c_unidad])) if c_unidad else "s/u"
-        pu_raw = float(pd.to_numeric(row[c_pu], errors="coerce") or 0.0) if c_pu and not pd.isna(row[c_pu]) else 0.0
+        u = normalizar_unidad(str(row[c_unidad])) if c_unidad and not pd.isna(row[c_unidad]) else "s/u"
+        pu_raw = _safe_float(row[c_pu]) if c_pu else 0.0
         pu = round(max(0.0, pu_raw), 2)
         esp = str(row[c_esp]).strip() if c_esp and not pd.isna(row[c_esp]) else ""
         cat = str(row[c_cat]).strip() if c_cat and not pd.isna(row[c_cat]) else ""
         
-        val_mat = round(max(0.0, float(pd.to_numeric(row[c_mat], errors="coerce") or 0.0)), 2) if c_mat and not pd.isna(row[c_mat]) else 0.0
-        val_mo = round(max(0.0, float(pd.to_numeric(row[c_mo], errors="coerce") or 0.0)), 2) if c_mo and not pd.isna(row[c_mo]) else 0.0
-        val_herr = round(max(0.0, float(pd.to_numeric(row[c_herr], errors="coerce") or 0.0)), 2) if c_herr and not pd.isna(row[c_herr]) else 0.0
-        val_ind = round(max(0.0, float(pd.to_numeric(row[c_ind], errors="coerce") or 0.0)), 2) if c_ind and not pd.isna(row[c_ind]) else 0.0
+        val_mat = round(max(0.0, _safe_float(row[c_mat])), 2) if c_mat else 0.0
+        val_mo = round(max(0.0, _safe_float(row[c_mo])), 2) if c_mo else 0.0
+        val_herr = round(max(0.0, _safe_float(row[c_herr])), 2) if c_herr else 0.0
+        val_ind = round(max(0.0, _safe_float(row[c_ind])), 2) if c_ind else 0.0
         suma_analitica = round(val_mat + val_mo + val_herr + val_ind, 2)
         
         rec = {
@@ -204,14 +213,14 @@ def procesar_excel_importacion(df: pd.DataFrame, tipo="proyecto", pct_utilidad_d
         }
         
         if tipo == "proyecto":
-            cant_raw = float(pd.to_numeric(row[c_cant], errors="coerce") or 0.0) if c_cant else 0.0
-            cant = round(cant_raw) if not admite_decimales(u) else round(cant_raw, 2)
+            cant_raw = _safe_float(row[c_cant]) if c_cant else 0.0
+            cant = int(round(cant_raw)) if not admite_decimales(u) else round(cant_raw, 2)
             rec["cantidad_contratada"] = cant
             
             # Utilidad por concepto (hereda la del proyecto si no se especifica)
             if c_util and not pd.isna(row[c_util]):
-                util_raw = pd.to_numeric(row[c_util], errors="coerce")
-                rec["porcentaje_utilidad"] = round(max(0.0, float(util_raw)), 2) if not pd.isna(util_raw) else float(pct_utilidad_default)
+                util_val = _safe_float(row[c_util], default=float(pct_utilidad_default))
+                rec["porcentaje_utilidad"] = round(max(0.0, util_val), 2)
             else:
                 rec["porcentaje_utilidad"] = round(float(pct_utilidad_default), 2)
                 

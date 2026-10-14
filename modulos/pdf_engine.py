@@ -9,10 +9,17 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 
 
 @st.cache_data(show_spinner=False)
-def generar_pdf_recibo_raya(proy_info: dict, est_info: dict, filas_raya: list, total_raya: float) -> bytes:
+def generar_pdf_recibo_pagos(
+    proy_info: dict,
+    est_info: dict,
+    filas_destajos: list,
+    filas_jornadas: list,
+    total_general: float
+) -> bytes:
     """
-    Genera un recibo oficial de liquidación de raya y destajos en PDF (ReportLab),
-    con diseño corporativo, desglose de jornales, tarifas y firmas de conformidad.
+    Genera un recibo oficial de liquidación de pagos y destajos en PDF (ReportLab),
+    con diseño corporativo, desglose por destajo (volumen * MO) y por jornada,
+    totales consolidados y firmas de conformidad.
     """
     pdf_buffer = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -27,43 +34,53 @@ def generar_pdf_recibo_raya(proy_info: dict, est_info: dict, filas_raya: list, t
     styles = getSampleStyleSheet()
 
     title_style = ParagraphStyle(
-        'RayaTitle',
+        'PagosTitle',
         parent=styles['Heading1'],
-        fontSize=14,
-        leading=17,
+        fontSize=13,
+        leading=16,
         textColor=colors.HexColor("#1A2530"),
         spaceAfter=2,
         fontName="Helvetica-Bold"
     )
     subtitle_style = ParagraphStyle(
-        'RayaSubtitle',
+        'PagosSubtitle',
         parent=styles['Normal'],
         fontSize=8,
         leading=10,
         textColor=colors.HexColor("#555555"),
         spaceAfter=10
     )
-    table_text = ParagraphStyle(
-        'RayaTableText',
+    section_h_style = ParagraphStyle(
+        'PagosSecH',
         parent=styles['Normal'],
-        fontSize=7.5,
-        leading=10,
+        fontSize=9,
+        leading=12,
+        textColor=colors.HexColor("#0D9488"),
+        fontName="Helvetica-Bold",
+        spaceBefore=6,
+        spaceAfter=4
+    )
+    table_text = ParagraphStyle(
+        'PagosTableText',
+        parent=styles['Normal'],
+        fontSize=7.2,
+        leading=9.5,
         textColor=colors.HexColor("#222222")
     )
     table_head = ParagraphStyle(
-        'RayaTableHead',
+        'PagosTableHead',
         parent=styles['Normal'],
-        fontSize=7.5,
-        leading=10,
+        fontSize=7.2,
+        leading=9.5,
         textColor=colors.white,
         fontName="Helvetica-Bold"
     )
 
-    story.append(Paragraph("ESTIMAPP | RECIBO OFICIAL DE LIQUIDACIÓN DE RAYA Y DESTAJOS", title_style))
+    story.append(Paragraph("ESTIMAPP | RECIBO OFICIAL DE LIQUIDACIÓN DE PAGOS Y DESTAJOS", title_style))
     fecha_emision = datetime.date.today().strftime('%d/%m/%Y')
     p_ini = est_info.get('periodo_inicio', '—')
     p_fin = est_info.get('periodo_fin', '—')
-    story.append(Paragraph(f"Fecha de Emisión: {fecha_emision} | Periodo de Corte: Del {p_ini} al {p_fin} | Sistema de Control de Destajos", subtitle_style))
+    story.append(Paragraph(f"Fecha de Emisión: {fecha_emision} | Periodo de Corte: Del {p_ini} al {p_fin} | Control de Mano de Obra y Destajos", subtitle_style))
 
     # Metadatos del Proyecto
     modalidad_lbl = str(proy_info.get('modalidad', 'publica')).capitalize()
@@ -98,13 +115,16 @@ def generar_pdf_recibo_raya(proy_info: dict, est_info: dict, filas_raya: list, t
     story.append(t_info)
     story.append(Spacer(1, 8))
 
-    # KPIs de Raya
-    total_jornales = sum(float(r.get("Jornales", 0.0)) for r in filas_raya)
+    # KPIs de Liquidación
+    total_destajos = sum(float(r.get("Total Destajo ($)", 0.0)) for r in filas_destajos)
+    total_jornadas = sum(float(r.get("Total a Pagar ($)", 0.0)) for r in filas_jornadas)
+    total_dias = sum(float(r.get("Jornadas", 0.0)) for r in filas_jornadas)
+
     kpi_data = [
         [
-            Paragraph(f"<para align=center><b>Total Trabajadores</b><br/><font size=10 color='#1A2530'><b>{len(filas_raya)}</b></font></para>", table_text),
-            Paragraph(f"<para align=center><b>Jornales Acumulados</b><br/><font size=10 color='#0288D1'><b>{total_jornales:.2f}</b></font></para>", table_text),
-            Paragraph(f"<para align=center><b>Monto Total Liquidado</b><br/><font size=10 color='#00875A'><b>${total_raya:,.2f} MXN</b></font></para>", table_text)
+            Paragraph(f"<para align=center><b>Total Pagos por Destajos</b><br/><font size=10 color='#0288D1'><b>${total_destajos:,.2f} MXN</b></font></para>", table_text),
+            Paragraph(f"<para align=center><b>Total Pagos por Jornadas</b><br/><font size=10 color='#D97706'><b>${total_jornadas:,.2f} MXN</b> <font size=7>({total_dias:.1f} jor)</font></font></para>", table_text),
+            Paragraph(f"<para align=center><b>Gran Total Liquidado</b><br/><font size=10 color='#00875A'><b>${total_general:,.2f} MXN</b></font></para>", table_text)
         ]
     ]
     t_kpi = Table(kpi_data, colWidths=[180, 180, 180])
@@ -118,74 +138,152 @@ def generar_pdf_recibo_raya(proy_info: dict, est_info: dict, filas_raya: list, t
     story.append(t_kpi)
     story.append(Spacer(1, 8))
 
-    # Tabla Desglosada de Trabajadores
-    worker_rows = [
-        [
-            Paragraph("<para align=center>#</para>", table_head),
-            Paragraph("Trabajador", table_head),
-            Paragraph("Especialidad", table_head),
-            Paragraph("<para align=center>Conceptos</para>", table_head),
-            Paragraph("<para align=right>Jornales</para>", table_head),
-            Paragraph("<para align=right>Tarifa Base ($)</para>", table_head),
-            Paragraph("<para align=right>Total Raya ($)</para>", table_head)
+    # =============================================================
+    # TABLA 1: ACTIVIDADES POR DESTAJO (SUPERIOR)
+    # =============================================================
+    story.append(Paragraph("<b>1. RELACIÓN DE ACTIVIDADES LIQUIDADAS POR DESTAJO</b>", section_h_style))
+    if filas_destajos:
+        dest_rows = [
+            [
+                Paragraph("<para align=center>#</para>", table_head),
+                Paragraph("Trabajador", table_head),
+                Paragraph("Clave", table_head),
+                Paragraph("Concepto", table_head),
+                Paragraph("<para align=center>Unidad</para>", table_head),
+                Paragraph("<para align=right>Volumen</para>", table_head),
+                Paragraph("<para align=right>P.U. Mano Obra ($)</para>", table_head),
+                Paragraph("<para align=right>Total Destajo ($)</para>", table_head)
+            ]
         ]
-    ]
-
-    for idx, r in enumerate(filas_raya, start=1):
-        worker_rows.append([
-            Paragraph(f"<para align=center>{idx}</para>", table_text),
-            Paragraph(f"{r.get('Trabajador', '')}", table_text),
-            Paragraph(f"{r.get('Especialidad', '')}", table_text),
-            Paragraph(f"<para align=center>{r.get('Conceptos Ejecutados', 1)}</para>", table_text),
-            Paragraph(f"<para align=right>{float(r.get('Jornales', 0)):.2f}</para>", table_text),
-            Paragraph(f"<para align=right>${float(r.get('Tarifa Base ($)', 0)):,.2f}</para>", table_text),
-            Paragraph(f"<para align=right><b>${float(r.get('Total a Pagar ($)', 0)):,.2f}</b></para>", table_text)
+        for idx, r in enumerate(filas_destajos, start=1):
+            c_desc = str(r.get("Concepto", ""))
+            if len(c_desc) > 35:
+                c_desc = c_desc[:33] + "..."
+            dest_rows.append([
+                Paragraph(f"<para align=center>{idx}</para>", table_text),
+                Paragraph(f"{r.get('Trabajador', '')}", table_text),
+                Paragraph(f"{r.get('Clave', '')}", table_text),
+                Paragraph(c_desc, table_text),
+                Paragraph(f"<para align=center>{r.get('Unidad', '')}</para>", table_text),
+                Paragraph(f"<para align=right>{float(r.get('Volumen', 0)):.3f}</para>", table_text),
+                Paragraph(f"<para align=right>${float(r.get('P.U. Mano de Obra ($)', 0)):,.2f}</para>", table_text),
+                Paragraph(f"<para align=right><b>${float(r.get('Total Destajo ($)', 0)):,.2f}</b></para>", table_text)
+            ])
+        dest_rows.append([
+            Paragraph("", table_text),
+            Paragraph("<b>TOTAL DESTAJOS:</b>", table_text),
+            Paragraph("", table_text),
+            Paragraph("", table_text),
+            Paragraph("", table_text),
+            Paragraph("", table_text),
+            Paragraph("", table_text),
+            Paragraph(f"<para align=right><font color='#0288D1'><b>${total_destajos:,.2f}</b></font></para>", table_text)
         ])
+        t_dest = Table(dest_rows, colWidths=[20, 100, 55, 140, 35, 55, 65, 70], repeatRows=1)
+        t_dest.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1A2530")),
+            ('INNERGRID', (0,0), (-1,-2), 0.5, colors.HexColor("#E2E8F0")),
+            ('BOX', (0,0), (-1,-1), 1, colors.HexColor("#94A3B8")),
+            ('BACKGROUND', (0,-1), (-1,-1), colors.HexColor("#F1F5F9")),
+            ('LINEABOVE', (0,-1), (-1,-1), 1, colors.HexColor("#0288D1")),
+            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+            ('TOPPADDING', (0,0), (-1,-1), 2),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 2),
+        ]))
+        story.append(t_dest)
+    else:
+        story.append(Paragraph("<i>No se registraron actividades por destajo en este periodo.</i>", table_text))
 
-    # Fila de Totales
-    worker_rows.append([
-        Paragraph("", table_text),
-        Paragraph("<b>TOTAL LIQUIDACIÓN DEL PERIODO:</b>", table_text),
-        Paragraph("", table_text),
-        Paragraph("", table_text),
-        Paragraph(f"<para align=right><b>{total_jornales:.2f}</b></para>", table_text),
-        Paragraph("", table_text),
-        Paragraph(f"<para align=right><font color='#00875A'><b>${total_raya:,.2f}</b></font></para>", table_text)
-    ])
+    story.append(Spacer(1, 8))
 
-    t_workers = Table(worker_rows, colWidths=[25, 145, 95, 60, 65, 75, 75], repeatRows=1)
-    t_workers.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1A2530")),
-        ('INNERGRID', (0,0), (-1,-2), 0.5, colors.HexColor("#E2E8F0")),
-        ('BOX', (0,0), (-1,-1), 1, colors.HexColor("#94A3B8")),
-        ('BACKGROUND', (0,-1), (-1,-1), colors.HexColor("#F1F5F9")),
-        ('LINEABOVE', (0,-1), (-1,-1), 1, colors.HexColor("#0D9488")),
-        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-        ('TOPPADDING', (0,0), (-1,-1), 2.5),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 2.5),
-    ]))
-    story.append(t_workers)
+    # =============================================================
+    # TABLA 2: ACTIVIDADES POR JORNADA (INFERIOR)
+    # =============================================================
+    story.append(Paragraph("<b>2. RELACIÓN DE ACTIVIDADES LIQUIDADAS POR JORNADA</b>", section_h_style))
+    if filas_jornadas:
+        jor_rows = [
+            [
+                Paragraph("<para align=center>#</para>", table_head),
+                Paragraph("Trabajador", table_head),
+                Paragraph("Especialidad / Rol", table_head),
+                Paragraph("<para align=right>Jornadas Trabajadas</para>", table_head),
+                Paragraph("<para align=right>Tarifa por Jornada ($)</para>", table_head),
+                Paragraph("<para align=right>Total a Pagar ($)</para>", table_head)
+            ]
+        ]
+        for idx, r in enumerate(filas_jornadas, start=1):
+            jor_rows.append([
+                Paragraph(f"<para align=center>{idx}</para>", table_text),
+                Paragraph(f"{r.get('Trabajador', '')}", table_text),
+                Paragraph(f"{r.get('Especialidad', '')}", table_text),
+                Paragraph(f"<para align=right>{float(r.get('Jornadas', 0)):.2f}</para>", table_text),
+                Paragraph(f"<para align=right>${float(r.get('Tarifa Base ($)', 0)):,.2f}</para>", table_text),
+                Paragraph(f"<para align=right><b>${float(r.get('Total a Pagar ($)', 0)):,.2f}</b></para>", table_text)
+            ])
+        jor_rows.append([
+            Paragraph("", table_text),
+            Paragraph("<b>TOTAL JORNADAS:</b>", table_text),
+            Paragraph("", table_text),
+            Paragraph(f"<para align=right><b>{total_dias:.2f}</b></para>", table_text),
+            Paragraph("", table_text),
+            Paragraph(f"<para align=right><font color='#D97706'><b>${total_jornadas:,.2f}</b></font></para>", table_text)
+        ])
+        t_jor = Table(jor_rows, colWidths=[25, 160, 115, 80, 80, 80], repeatRows=1)
+        t_jor.setStyle(TableStyle([
+            ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1A2530")),
+            ('INNERGRID', (0,0), (-1,-2), 0.5, colors.HexColor("#E2E8F0")),
+            ('BOX', (0,0), (-1,-1), 1, colors.HexColor("#94A3B8")),
+            ('BACKGROUND', (0,-1), (-1,-1), colors.HexColor("#F1F5F9")),
+            ('LINEABOVE', (0,-1), (-1,-1), 1, colors.HexColor("#D97706")),
+            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+            ('TOPPADDING', (0,0), (-1,-1), 2.5),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 2.5),
+        ]))
+        story.append(t_jor)
+    else:
+        story.append(Paragraph("<i>No se registraron jornadas laboradas en este periodo.</i>", table_text))
+
     story.append(Spacer(1, 10))
 
-    # Recibos de conformidad individuales
+    # =============================================================
+    # CONSTANCIAS DE CONFORMIDAD Y LIQUIDACIÓN EN EFECTIVO
+    # =============================================================
     story.append(Paragraph("<b>CONSTANCIA DE CONFORMIDAD Y LIQUIDACIÓN EN EFECTIVO</b>", ParagraphStyle('SubH', parent=styles['Normal'], fontSize=8, leading=10, fontName="Helvetica-Bold", textColor=colors.HexColor("#1A2530"))))
     story.append(Spacer(1, 3))
 
+    # Consolidar trabajadores únicos para recibos
+    trabajadores_resumen = {}
+    for d in filas_destajos:
+        t_nom = d.get("Trabajador", "Trabajador")
+        t_esp = d.get("Especialidad", "Destajo")
+        if t_nom not in trabajadores_resumen:
+            trabajadores_resumen[t_nom] = {"nombre": t_nom, "especialidad": t_esp, "total": 0.0}
+        trabajadores_resumen[t_nom]["total"] += float(d.get("Total Destajo ($)", 0.0))
+
+    for j in filas_jornadas:
+        t_nom = j.get("Trabajador", "Trabajador")
+        t_esp = j.get("Especialidad", "Jornada")
+        if t_nom not in trabajadores_resumen:
+            trabajadores_resumen[t_nom] = {"nombre": t_nom, "especialidad": t_esp, "total": 0.0}
+        trabajadores_resumen[t_nom]["total"] += float(j.get("Total a Pagar ($)", 0.0))
+
     receipt_rows = []
-    for r in filas_raya:
+    for t_nom, t_data in trabajadores_resumen.items():
         receipt_rows.append([
-            Paragraph(f"<b>Trabajador:</b> {r.get('Trabajador')} ({r.get('Especialidad')})<br/><b>Importe Recibido:</b> ${float(r.get('Total a Pagar ($)', 0)):,.2f} MXN", table_text),
-            Paragraph("<b>Firma de Recibido / Huella:</b><br/><br/>________________________________________", table_text)
+            Paragraph(f"<b>Trabajador:</b> {t_data['nombre']} ({t_data['especialidad']})<br/><b>Importe Recibido:</b> ${t_data['total']:,.2f} MXN", table_text),
+            Paragraph("<b>Firma de Recibido:</b><br/><br/>________________________________________", table_text)
         ])
-    t_receipts = Table(receipt_rows, colWidths=[280, 260])
-    t_receipts.setStyle(TableStyle([
-        ('BOX', (0,0), (-1,-1), 0.5, colors.HexColor("#CBD5E1")),
-        ('INNERGRID', (0,0), (-1,-1), 0.5, colors.HexColor("#E2E8F0")),
-        ('TOPPADDING', (0,0), (-1,-1), 3),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 3),
-        ('BACKGROUND', (0,0), (-1,-1), colors.HexColor("#FAFAFA")),
-    ]))
-    story.append(t_receipts)
+
+    if receipt_rows:
+        t_receipts = Table(receipt_rows, colWidths=[280, 260])
+        t_receipts.setStyle(TableStyle([
+            ('BOX', (0,0), (-1,-1), 0.5, colors.HexColor("#CBD5E1")),
+            ('INNERGRID', (0,0), (-1,-1), 0.5, colors.HexColor("#E2E8F0")),
+            ('TOPPADDING', (0,0), (-1,-1), 3),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 3),
+            ('BACKGROUND', (0,0), (-1,-1), colors.HexColor("#FAFAFA")),
+        ]))
+        story.append(t_receipts)
     story.append(Spacer(1, 12))
 
     # Firmas del Residente y Contratista
@@ -206,6 +304,12 @@ def generar_pdf_recibo_raya(proy_info: dict, est_info: dict, filas_raya: list, t
 
     doc.build(story)
     return pdf_buffer.getvalue()
+
+
+@st.cache_data(show_spinner=False)
+def generar_pdf_recibo_raya(proy_info: dict, est_info: dict, filas_raya: list, total_raya: float) -> bytes:
+    """Wrapper de compatibilidad retroactiva hacia generar_pdf_recibo_pagos."""
+    return generar_pdf_recibo_pagos(proy_info, est_info, [], filas_raya, total_raya)
 
 
 @st.cache_data(show_spinner=False)

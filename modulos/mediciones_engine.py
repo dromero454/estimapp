@@ -6,7 +6,7 @@ from modulos.db_engine import normalizar_unidad, extraer_nombre_archivo, extraer
 def get_personal_obra_disponible(supabase, user_id: str):
     """Consulta la lista de trabajadores activos para el usuario."""
     try:
-        res = supabase.table("personal_obra").select("id, nombre, especialidad, costo_jornal_base")\
+        res = supabase.table("personal_obra").select("id, nombre, modalidad_pago, especialidad, costo_jornal_base")\
             .eq("user_id", user_id)\
             .order("nombre")\
             .execute()
@@ -53,11 +53,14 @@ def render_mediciones_tab(supabase, user_id: str, lista_proyectos: list, get_est
     opcion_sin_asignar = "Sin asignar (Cuadrilla general)"
     opciones_personal = [opcion_sin_asignar]
     personal_dict_map = {opcion_sin_asignar: None}
+    personal_obj_map = {opcion_sin_asignar: {"id": None, "modalidad_pago": "Sin asignar"}}
     
     for p in personal_lista:
-        p_label = f"{p['nombre']} ({p.get('especialidad') or 'General'})"
+        p_mod = p.get("modalidad_pago") or "Por Destajo"
+        p_label = f"{p['nombre']} ({p_mod} - {p.get('especialidad') or 'General'})"
         opciones_personal.append(p_label)
         personal_dict_map[p_label] = p["id"]
+        personal_obj_map[p_label] = p
 
     # Fila 1: Selección de Estimación y Concepto
     c_est, c_con = st.columns([1, 2])
@@ -80,7 +83,7 @@ def render_mediciones_tab(supabase, user_id: str, lista_proyectos: list, get_est
 
     st.markdown("---")
     
-    # Fila 2: Cabecera con datos del concepto y Selector de Destajista / Jornales (Etapa 4)
+    # Fila 2: Cabecera con datos del concepto y Selector de Destajista / Jornales (BUG-012)
     st.markdown(f"**Concepto:** `{obj_conc['clave']}` | **Unidad:** `{u_base}` | **P.U. Contratado:** `${pu_conc:,.2f}`")
     
     c_ver = st.session_state.get("cap_counter", 0)
@@ -88,18 +91,45 @@ def render_mediciones_tab(supabase, user_id: str, lista_proyectos: list, get_est
 
     col_dest1, col_dest2 = st.columns([2, 1])
     dest_sel = col_dest1.selectbox(
-        "👷 Destajista / Cuadrilla responsable",
+        "👷 Destajista / Trabajador responsable",
         opciones_personal,
         index=0,
         key=f"dest_sel_{c_ver}"
     )
-    horas_jornales = col_dest2.number_input(
-        "Horas o Jornales invertidos",
-        min_value=0.0,
-        value=1.0,
-        step=0.5,
-        key=f"jornales_{c_ver}"
-    )
+
+    sel_trabajador_obj = personal_obj_map.get(dest_sel, {})
+    es_destajo = (sel_trabajador_obj.get("modalidad_pago") == "Por Destajo")
+    es_sin_asignar = (sel_trabajador_obj.get("id") is None)
+
+    if es_destajo:
+        horas_jornales = col_dest2.number_input(
+            "Jornadas invertidas",
+            min_value=0.0,
+            value=0.0,
+            step=0.5,
+            disabled=True,
+            key=f"jornales_{c_ver}",
+            help="💡 Este trabajador cobra 'Por Destajo'. El importe a pagar se calculará automáticamente multiplicando el volumen cuantificado por el costo de mano de obra del concepto en el catálogo."
+        )
+    elif es_sin_asignar:
+        horas_jornales = col_dest2.number_input(
+            "Jornadas invertidas",
+            min_value=0.0,
+            value=0.0,
+            step=0.5,
+            disabled=True,
+            key=f"jornales_{c_ver}",
+            help="Asigna un trabajador específico para habilitar el cómputo de jornadas."
+        )
+    else:
+        horas_jornales = col_dest2.number_input(
+            "Jornadas invertidas",
+            min_value=0.0,
+            value=1.0,
+            step=0.5,
+            key=f"jornales_{c_ver}",
+            help="Número de días/jornadas laboradas en esta actividad."
+        )
 
     # Localización y Ejes
     col_loc1, col_loc2, col_loc3 = st.columns(3)
@@ -274,15 +304,28 @@ def render_mediciones_tab(supabase, user_id: str, lista_proyectos: list, get_est
             imp_m = round(cant_m * pu_c, 2)
             total_periodo_acum += imp_m
 
-            destajista_nom = p_info.get("nombre") if p_info else "Sin asignar"
-            jornales_m = float(m.get("horas_o_jornales") or 1.0)
+            destajista_lbl = opcion_sin_asignar
+            if p_info:
+                pid = m.get("id_personal") or p_info.get("id")
+                match_p = next((p for p in personal_lista if p["id"] == pid), None)
+                if match_p:
+                    p_mod = match_p.get("modalidad_pago") or "Por Destajo"
+                    destajista_lbl = f"{match_p['nombre']} ({p_mod} - {match_p.get('especialidad') or 'General'})"
+                elif p_info.get("nombre"):
+                    p_mod = p_info.get("modalidad_pago") or "Por Destajo"
+                    destajista_lbl = f"{p_info['nombre']} ({p_mod} - {p_info.get('especialidad') or 'General'})"
+                    if destajista_lbl not in opciones_personal:
+                        opciones_personal.append(destajista_lbl)
+                        personal_dict_map[destajista_lbl] = pid
+
+            jornales_m = float(m.get("horas_o_jornales") or 0.0)
 
             rows.append({
                 "#": idx,
                 "id": m["id"],
                 "Clave": clave_c,
-                "Destajista": destajista_nom,
-                "Jornales": jornales_m,
+                "Destajista / Trabajador": destajista_lbl,
+                "Jornadas": jornales_m,
                 "Localización": m.get("localizacion") or "",
                 "Eje": m.get("eje") or "",
                 "Tramo": m.get("tramo") or "",
@@ -307,8 +350,8 @@ def render_mediciones_tab(supabase, user_id: str, lista_proyectos: list, get_est
             column_config={
                 "#": st.column_config.NumberColumn("#", disabled=True, width=50),
                 "Clave": st.column_config.TextColumn("Clave", disabled=True, width=110),
-                "Destajista": st.column_config.TextColumn("Destajista", disabled=True, width=150),
-                "Jornales": st.column_config.NumberColumn("Jornales", format="%.1f", disabled=True, width=80),
+                "Destajista / Trabajador": st.column_config.SelectboxColumn("Destajista / Trabajador", options=opciones_personal, width=180),
+                "Jornadas": st.column_config.NumberColumn("Jornadas", format="%.2f", min_value=0.0, step=0.5, width=90),
                 "Localización": st.column_config.TextColumn("Localización", width=160),
                 "Eje": st.column_config.TextColumn("Eje", width=90),
                 "Tramo": st.column_config.TextColumn("Tramo", width=90),
@@ -342,6 +385,17 @@ def render_mediciones_tab(supabase, user_id: str, lista_proyectos: list, get_est
 
                 up_payload = {}
                 id_med_up = rows[r_idx]["id"]
+
+                if "Destajista / Trabajador" in col_vals:
+                    val_dest_lbl = col_vals["Destajista / Trabajador"]
+                    up_payload["id_personal"] = personal_dict_map.get(val_dest_lbl, None)
+
+                if "Jornadas" in col_vals:
+                    val_jor = col_vals["Jornadas"]
+                    try:
+                        up_payload["horas_o_jornales"] = round(max(0.0, float(val_jor)), 2) if val_jor is not None else 0.0
+                    except (ValueError, TypeError):
+                        up_payload["horas_o_jornales"] = 0.0
 
                 for k in ["Localización", "Eje", "Tramo"]:
                     if k in col_vals:

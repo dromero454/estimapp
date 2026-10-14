@@ -638,7 +638,7 @@ ts_descarga = int(datetime.datetime.now().timestamp())
 # INTERFAZ PRINCIPAL (8 PESTAÑAS UNIVERSALES)
 # -------------------------------------------------------------
 LISTA_TABS_OBRA = [
-    "📊 Resumen Financiero", "📐 Captura en Campo", "📑 Estimaciones y Raya", 
+    "📊 Resumen Financiero", "📐 Captura en Campo", "📑 Estimaciones y Pagos", 
     "📚 Catálogo del Proyecto", "📖 Biblioteca Maestra", "👷 Personal y Cuadrillas",
     "🚚 Proveedores", "🏢 Proyectos"
 ]
@@ -668,7 +668,7 @@ with tab_captura:
     render_mediciones_tab(supabase, user_id, lista_proyectos, get_estimaciones, get_conceptos, get_mediciones)
 
 # -------------------------------------------------------------
-# TAB 3: ESTIMACIONES Y RAYA
+# TAB 3: ESTIMACIONES Y PAGOS
 # -------------------------------------------------------------
 with tab_estimaciones:
     render_estimaciones_tab(supabase, user_id, lista_proyectos, get_estimaciones, get_conceptos, get_mediciones)

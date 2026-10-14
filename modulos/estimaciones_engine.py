@@ -3,8 +3,8 @@ import pandas as pd
 import datetime
 import urllib.request
 import json
-from modulos.db_engine import extraer_nombre_archivo, extraer_nombres_archivos
-from modulos.pdf_engine import generar_pdf_recibo_raya
+from modulos.db_engine import extraer_nombre_archivo, extraer_nombres_archivos, normalizar_unidad
+from modulos.pdf_engine import generar_pdf_recibo_pagos, generar_pdf_recibo_raya
 from modulos.excel_engine import (
     inyectar_datos_excel_imss, inyectar_datos_excel_pjf,
     generar_excel_estimapp, descargar_plantilla_supabase
@@ -123,9 +123,9 @@ def generar_texto_recibo_raya(proy_obj: dict, est_obj: dict, filas_raya: list, t
 
 def render_estimaciones_tab(supabase, user_id: str, lista_proyectos: list, get_estimaciones, get_conceptos, get_mediciones):
     """
-    Renderiza la Pestaña 3: Estimaciones y Raya (modulos/estimaciones_engine.py).
-    Permite cortes libres (N días), liquidación de raya y destajos por cuadrilla,
-    telemetría meteorológica histórica con Open-Meteo y exportaciones oficiales.
+    Renderiza la Pestaña 3: Estimaciones y Pagos (modulos/estimaciones_engine.py).
+    Permite cortes libres (N días), liquidación de mano de obra (destajos y jornadas),
+    reporte meteorológico histórico con Open-Meteo y exportaciones oficiales.
     """
     st.subheader("Periodos de Estimación")
 
@@ -353,12 +353,17 @@ def render_estimaciones_tab(supabase, user_id: str, lista_proyectos: list, get_e
         # =============================================================
         est_labels = [f"Estimación #{e['num_periodo']} (Del {e['periodo_inicio']} al {e['periodo_fin']})" for e in estimaciones_proyecto]
         
+        # =============================================================
+        # SUBPANEL: LIQUIDACIÓN DE PAGOS Y CONTROL DE DESTAJOS (BUG-008, BUG-010)
+        # =============================================================
+        est_labels = [f"Estimación #{e['num_periodo']} (Del {e['periodo_inicio']} al {e['periodo_fin']})" for e in estimaciones_proyecto]
+        
         st.markdown("---")
-        st.markdown("##### 👷 Liquidación de Raya y Control de Destajos:")
+        st.markdown("##### 👷 Liquidación de Pagos y Control de Destajos:")
         
         col_sel_est_raya, _ = st.columns([2, 1])
         est_raya_sel_label = col_sel_est_raya.selectbox(
-            "Seleccionar Estimación para Auditoría de Raya:",
+            "Seleccionar Estimación para Auditoría de Pagos:",
             est_labels,
             key="sel_est_raya_periodo"
         )
@@ -367,93 +372,153 @@ def render_estimaciones_tab(supabase, user_id: str, lista_proyectos: list, get_e
         est_obj_raya = estimaciones_proyecto[idx_est_raya]
         meds_raya = get_mediciones(est_obj_raya["id"])
 
-        # Identificar mediciones con destajistas asignados
+        # Identificar mediciones con trabajador asignado
         meds_con_trabajador = [m for m in meds_raya if m.get("id_personal") is not None or m.get("personal_obra")]
 
-        # Muestra el subpanel si es modalidad privada/mixta o si hay destajistas asignados
+        # Muestra el subpanel si es modalidad privada/mixta o si hay trabajadores asignados
         debe_mostrar_raya = (modalidad_proy in ["privada", "mixta"]) or (len(meds_con_trabajador) > 0)
 
         if not debe_mostrar_raya:
-            st.info("💡 En proyectos de obra pública tradicional, la liquidación de raya es opcional. Asigna destajistas a tus mediciones de campo en la Tab de Captura en Campo para habilitar este control.")
+            st.info("💡 En proyectos de obra pública tradicional, la liquidación de mano de obra es opcional. Asigna trabajadores a tus mediciones de campo en la Tab de Captura en Campo para habilitar este control.")
         else:
             if not meds_con_trabajador:
-                st.warning("⚠️ No se registraron mediciones con destajista asignado en este periodo de corte.")
+                st.warning("⚠️ No se registraron mediciones con trabajador/destajista asignado en este periodo de corte.")
             else:
-                # Agrupación por trabajador
-                agrupado_trabajadores = {}
+                # Separar y procesar mediciones: Destajo vs Jornada
+                filas_destajos = []
+                agrupado_jornadas = {}
+                total_destajos_periodo = 0.0
+                total_jornadas_monto_periodo = 0.0
+                total_jornadas_cant_periodo = 0.0
+
                 for m in meds_con_trabajador:
                     p_info = m.get("personal_obra") or {}
+                    c_info = m.get("catalogo_conceptos") or {}
+                    
                     pid = m.get("id_personal") or p_info.get("id") or "desc"
                     nombre_trab = p_info.get("nombre") or f"Trabajador #{pid}"
                     especialidad = p_info.get("especialidad") or "General"
-                    costo_jornal = float(p_info.get("costo_jornal_base") or 0.0)
+                    mod_pago = p_info.get("modalidad_pago") or "Por Destajo"
+                    tarifa_dia = float(p_info.get("costo_jornal_base") or 0.0)
                     
-                    jornales = float(m.get("horas_o_jornales") or 1.0)
-                    c_info = m.get("catalogo_conceptos") or {}
-                    c_clave = c_info.get("clave", "—")
+                    clave_c = c_info.get("clave") or "—"
+                    desc_c = c_info.get("descripcion") or "Concepto de obra"
+                    unidad_c = normalizar_unidad(c_info.get("unidad") or "pza")
+                    pu_mo = float(c_info.get("costo_mano_obra") or 0.0)
+                    volumen_m = float(m.get("cantidad_total") or 0.0)
+                    jornales_m = float(m.get("horas_o_jornales") or 0.0)
 
-                    if pid not in agrupado_trabajadores:
-                        agrupado_trabajadores[pid] = {
+                    if mod_pago == "Por Destajo":
+                        importe_dest = round(volumen_m * pu_mo, 2)
+                        total_destajos_periodo += importe_dest
+                        filas_destajos.append({
                             "Trabajador": nombre_trab,
                             "Especialidad": especialidad,
-                            "Jornales": 0.0,
-                            "Tarifa Base ($)": costo_jornal,
-                            "Conceptos": set(),
-                            "Total a Pagar ($)": 0.0
-                        }
+                            "Clave": clave_c,
+                            "Concepto": desc_c,
+                            "Unidad": unidad_c,
+                            "Volumen": volumen_m,
+                            "P.U. Mano de Obra ($)": pu_mo,
+                            "Total Destajo ($)": importe_dest
+                        })
+                    else:
+                        # Por Jornada (agrupación consolidada por trabajador en el periodo)
+                        if pid not in agrupado_jornadas:
+                            agrupado_jornadas[pid] = {
+                                "Trabajador": nombre_trab,
+                                "Especialidad": especialidad,
+                                "Jornadas": 0.0,
+                                "Tarifa Base ($)": tarifa_dia,
+                                "Conceptos": set(),
+                                "Total a Pagar ($)": 0.0
+                            }
+                        agrupado_jornadas[pid]["Jornadas"] += jornales_m
+                        agrupado_jornadas[pid]["Conceptos"].add(clave_c)
 
-                    agrupado_trabajadores[pid]["Jornales"] += jornales
-                    agrupado_trabajadores[pid]["Conceptos"].add(c_clave)
-
-                filas_raya = []
-                total_raya_periodo = 0.0
-                total_jornales_periodo = 0.0
-
-                for pid, t_data in agrupado_trabajadores.items():
-                    monto_trab = round(t_data["Jornales"] * t_data["Tarifa Base ($)"], 2)
-                    t_data["Total a Pagar ($)"] = monto_trab
-                    total_raya_periodo += monto_trab
-                    total_jornales_periodo += t_data["Jornales"]
-
-                    filas_raya.append({
+                filas_jornadas = []
+                for pid, t_data in agrupado_jornadas.items():
+                    monto_jornada = round(t_data["Jornadas"] * t_data["Tarifa Base ($)"], 2)
+                    t_data["Total a Pagar ($)"] = monto_jornada
+                    total_jornadas_monto_periodo += monto_jornada
+                    total_jornadas_cant_periodo += t_data["Jornadas"]
+                    filas_jornadas.append({
                         "Trabajador": t_data["Trabajador"],
                         "Especialidad": t_data["Especialidad"],
                         "Conceptos Ejecutados": len(t_data["Conceptos"]),
-                        "Jornales": round(t_data["Jornales"], 2),
+                        "Jornadas": round(t_data["Jornadas"], 2),
                         "Tarifa Base ($)": t_data["Tarifa Base ($)"],
-                        "Total a Pagar ($)": monto_trab
+                        "Total a Pagar ($)": monto_jornada
                     })
 
-                col_r1, col_r2, col_r3 = st.columns(3)
-                col_r1.metric("Monto Total de Raya", f"${total_raya_periodo:,.2f} MXN")
-                col_r2.metric("Trabajadores en Campo", f"{len(filas_raya)}")
-                col_r3.metric("Jornales Acumulados", f"{total_jornales_periodo:.2f}")
+                total_general_mo = total_destajos_periodo + total_jornadas_monto_periodo
 
-                df_raya = pd.DataFrame(filas_raya)
-                st.dataframe(
-                    df_raya,
-                    column_config={
-                        "Trabajador": st.column_config.TextColumn("Trabajador", width=180),
-                        "Especialidad": st.column_config.TextColumn("Especialidad", width=130),
-                        "Conceptos Ejecutados": st.column_config.NumberColumn("Conceptos", width=100),
-                        "Jornales": st.column_config.NumberColumn("Jornales", format="%.2f", width=100),
-                        "Tarifa Base ($)": st.column_config.NumberColumn("Tarifa Base ($)", format="$%.2f", width=120),
-                        "Total a Pagar ($)": st.column_config.NumberColumn("Total Raya ($)", format="$%.2f", width=130),
-                    },
-                    use_container_width=True,
-                    hide_index=True
-                )
+                col_r1, col_r2, col_r3, col_r4 = st.columns(4)
+                col_r1.metric("Gran Total Mano de Obra", f"${total_general_mo:,.2f} MXN")
+                col_r2.metric("Total por Destajos", f"${total_destajos_periodo:,.2f} MXN")
+                col_r3.metric("Total por Jornadas", f"${total_jornadas_monto_periodo:,.2f} MXN")
+                col_r4.metric("Jornadas Acumuladas", f"{total_jornadas_cant_periodo:.2f}")
 
-                # Descarga Oficial del Recibo de Liquidación de Raya en PDF
-                pdf_raya_bytes = generar_pdf_recibo_raya(proy_obj_actual, est_obj_raya, filas_raya, total_raya_periodo)
-                contrato_raya = proy_obj_actual.get('contrato_no') or 'Obra'
+                # =============================================================
+                # TABLA 1: ACTIVIDADES POR DESTAJO (SUPERIOR)
+                # =============================================================
+                st.markdown("<div style='height: 6px;'></div>", unsafe_allow_html=True)
+                st.markdown("###### 🔨 Relación de Actividades Liquidadas por Destajo")
+                if filas_destajos:
+                    df_dest = pd.DataFrame(filas_destajos)
+                    df_dest.insert(0, "#", range(1, len(df_dest) + 1))
+                    st.dataframe(
+                        df_dest[["#", "Trabajador", "Clave", "Concepto", "Unidad", "Volumen", "P.U. Mano de Obra ($)", "Total Destajo ($)"]],
+                        column_config={
+                            "#": st.column_config.NumberColumn("#", width=50),
+                            "Trabajador": st.column_config.TextColumn("Trabajador", width=160),
+                            "Clave": st.column_config.TextColumn("Clave", width=95),
+                            "Concepto": st.column_config.TextColumn("Concepto", width=240),
+                            "Unidad": st.column_config.TextColumn("Unidad", width=70),
+                            "Volumen": st.column_config.NumberColumn("Volumen", format="%.3f", width=90),
+                            "P.U. Mano de Obra ($)": st.column_config.NumberColumn("P.U. Mano Obra", format="$%.2f", width=120),
+                            "Total Destajo ($)": st.column_config.NumberColumn("Total Destajo ($)", format="$%.2f", width=130),
+                        },
+                        use_container_width=True,
+                        hide_index=True
+                    )
+                else:
+                    st.warning("⚠️ No se registraron actividades cobradas por destajo en este periodo de corte.")
+
+                # =============================================================
+                # TABLA 2: ACTIVIDADES POR JORNADA (INFERIOR)
+                # =============================================================
+                st.markdown("<div style='height: 6px;'></div>", unsafe_allow_html=True)
+                st.markdown("###### ⏱️ Relación de Actividades Liquidadas por Jornada")
+                if filas_jornadas:
+                    df_jor = pd.DataFrame(filas_jornadas)
+                    df_jor.insert(0, "#", range(1, len(df_jor) + 1))
+                    st.dataframe(
+                        df_jor[["#", "Trabajador", "Especialidad", "Conceptos Ejecutados", "Jornadas", "Tarifa Base ($)", "Total a Pagar ($)"]],
+                        column_config={
+                            "#": st.column_config.NumberColumn("#", width=50),
+                            "Trabajador": st.column_config.TextColumn("Trabajador", width=170),
+                            "Especialidad": st.column_config.TextColumn("Especialidad", width=120),
+                            "Conceptos Ejecutados": st.column_config.NumberColumn("Conceptos", width=95),
+                            "Jornadas": st.column_config.NumberColumn("Jornadas", format="%.2f", width=95),
+                            "Tarifa Base ($)": st.column_config.NumberColumn("Tarifa por Jornada ($)", format="$%.2f", width=130),
+                            "Total a Pagar ($)": st.column_config.NumberColumn("Total a Pagar ($)", format="$%.2f", width=130),
+                        },
+                        use_container_width=True,
+                        hide_index=True
+                    )
+                else:
+                    st.warning("⚠️ No se registraron jornadas laboradas en este periodo de corte.")
+
+                # Descarga Oficial del Recibo de Liquidación de Pagos en PDF
+                pdf_pagos_bytes = generar_pdf_recibo_pagos(proy_obj_actual, est_obj_raya, filas_destajos, filas_jornadas, total_general_mo)
+                contrato_nom = proy_obj_actual.get('contrato_no') or 'Obra'
                 st.download_button(
                     label="📄 Descargar Recibo de Liquidación (PDF)",
-                    data=pdf_raya_bytes,
-                    file_name=f"Recibo_Raya_{contrato_raya}_Est_{est_obj_raya['num_periodo']}.pdf",
+                    data=pdf_pagos_bytes,
+                    file_name=f"Recibo_Liquidacion_Pagos_{contrato_nom}_Est_{est_obj_raya['num_periodo']}.pdf",
                     mime="application/pdf",
                     use_container_width=True,
-                    key="btn_descarga_recibo_raya"
+                    key="btn_descarga_recibo_pagos"
                 )
 
         # Muestra métricas de telemetría si están registradas para la estimación activa
@@ -461,7 +526,7 @@ def render_estimaciones_tab(supabase, user_id: str, lista_proyectos: list, get_e
         if clima_est:
             st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
             st.info(
-                f"🌤️ **Telemetría Meteorológica del Periodo ({est_obj_raya['periodo_inicio']} al {est_obj_raya['periodo_fin']}):** "
+                f"🌤️ **Reporte Meteorológico del Periodo ({est_obj_raya['periodo_inicio']} al {est_obj_raya['periodo_fin']}):** "
                 f"Temperatura Media: **{clima_est.get('temp_media_c')} °C** | "
                 f"Máxima: **{clima_est.get('temp_max_c')} °C** | "
                 f"Precipitación: **{clima_est.get('precipitacion_mm')} mm** | "

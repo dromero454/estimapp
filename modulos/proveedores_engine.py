@@ -65,19 +65,28 @@ def render_proveedores_tab(supabase: Client, user_id: str):
                     key=f"prov_giro_{pv_counter}"
                 )
 
+                giro_otro_detalle = st.text_input(
+                    "Especificar Giro Comercial (aplica si seleccionó 'Otros')",
+                    placeholder="Ej: Renta de andamios, Laboratorio de control de calidad...",
+                    key=f"prov_giro_otro_{pv_counter}"
+                )
+
                 btn_guardar_prov = st.form_submit_button("Guardar Proveedor", type="primary", use_container_width=True)
 
                 if btn_guardar_prov:
                     if not nombre_comercial or not nombre_comercial.strip():
                         st.error("⚠️ El nombre comercial o razón social es obligatorio.")
                     else:
+                        giro_final = giro
+                        if giro == "Otros" and giro_otro_detalle and giro_otro_detalle.strip():
+                            giro_final = f"Otros: {giro_otro_detalle.strip()}"
                         try:
                             supabase.table("proveedores").insert({
                                 "user_id": user_id,
                                 "nombre_comercial": nombre_comercial.strip(),
                                 "contacto": contacto.strip() if contacto else None,
                                 "telefono": telefono.strip() if telefono else None,
-                                "giro": giro
+                                "giro": giro_final
                             }).execute()
 
                             st.session_state["proveedor_form_counter"] += 1
@@ -148,6 +157,10 @@ def render_proveedores_tab(supabase: Client, user_id: str):
         st.info("🚚 Aún no has registrado proveedores o casas de materiales. Da de alta al primero usando el formulario superior.")
         return
 
+    # Detección de giros personalizados registrados previamente
+    giros_custom = sorted(list({p.get("giro") for p in proveedores_list if p.get("giro") and p.get("giro") not in GIROS_LIST}))
+    giros_totales = GIROS_LIST + giros_custom
+
     # Barra de búsqueda y filtrado ágil
     col_s1, col_s2, col_s3 = st.columns([2, 1, 1])
     with col_s1:
@@ -159,7 +172,7 @@ def render_proveedores_tab(supabase: Client, user_id: str):
     with col_s2:
         filtro_giro = st.selectbox(
             "Filtrar por giro comercial:",
-            options=["Todos"] + GIROS_LIST,
+            options=["Todos"] + giros_totales,
             key="filtro_prov_giro"
         )
     with col_s3:
@@ -180,7 +193,10 @@ def render_proveedores_tab(supabase: Client, user_id: str):
         ]
 
     if filtro_giro != "Todos":
-        filtrados = [p for p in filtrados if p.get("giro") == filtro_giro]
+        if filtro_giro == "Otros":
+            filtrados = [p for p in filtrados if p.get("giro") == "Otros" or (p.get("giro") or "").startswith("Otros:")]
+        else:
+            filtrados = [p for p in filtrados if p.get("giro") == filtro_giro]
 
     st.markdown("##### Directorio Comercial Activo")
     st.caption("💡 *Edita directamente las celdas de la tabla para actualizar la información del proveedor.*")
@@ -204,7 +220,7 @@ def render_proveedores_tab(supabase: Client, user_id: str):
             "nombre_comercial": st.column_config.TextColumn("Razón Social / Nombre Comercial", required=True),
             "contacto": st.column_config.TextColumn("Contacto / Asesor"),
             "telefono": st.column_config.TextColumn("Teléfono / WhatsApp"),
-            "giro": st.column_config.SelectboxColumn("Giro Comercial", options=GIROS_LIST, required=True)
+            "giro": st.column_config.SelectboxColumn("Giro Comercial", options=giros_totales, required=True)
         },
         use_container_width=True,
         hide_index=True,
