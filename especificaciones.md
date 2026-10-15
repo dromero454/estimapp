@@ -106,22 +106,39 @@ El sistema opera sobre el esquema `public` con **13 tablas relacionales activas*
 ### 4.1 `dashboard_engine.py` (Balance Presupuestal y Financiero)
 - **Tri-modal adaptativo**:
   - `publica`: Enfoque contractual tradicional (Contratado, Estimado, Saldo por Ejercer, Avance Oficial y Barra de Progreso).
-  - `privada`: Enfoque de negocio y rentabilidad real (Erogado Real, Utilidad Bruta, Margen del Despacho, Destajos Pagados y Semáforo de Nómina).
-  - `mixta`: Dos columnas paralelas sincronizadas (`col_pub` y `col_priv`).
+  - `privada`: Enfoque de rentabilidad y negocio en dos contenedores superiores secuenciales:
+    1. *Resumen Global del Proyecto* (ancho completo): 5 KPIs principales (`Presupuesto Pactado`, `Gasto Reportable` con badge rojo de excedente, `Gasto Erogado Real` con badge rojo de sobregiro presupuestal, `Utilidad Bruta Real` con advertencia de sujeción a adenda y `Margen Real` con badge tricolor dinámico: rojo si < 0%, amarillo si 0% ≤ margen < meta, verde si ≥ meta), más banner inferior de advertencia compacta para conceptos sobregirados.
+    2. *Distribución de Costos y Margen del Despacho*: Contenedor compuesto por la gráfica de dona interactiva (Altair / Vega-Lite) a la izquierda y tabla interactiva a la derecha (`Rubro`, `Importe`, `% Total` y `Estatus`), donde la columna `Estatus` condensa el semáforo inteligente adaptándose en tiempo real según el filtro activo (`Total Acumulado` o `Estimación #N`).
+  - `mixta`: Dos columnas paralelas sincronizadas (`col_pub` y `col_priv`), integrando igualmente la tabla de distribución con columna `Estatus`.
+- **Lógica del Semáforo Condensado en Tabla (`Estatus`)**:
+  - *Herramienta y Equipo*: Comparado contra el % objetivo contratado del proyecto (`pct_herr_proy`): `🟢 En rango (≤ X%)` vs `🔴 Excedido`.
+  - *Gastos Indirectos*: Comparado contra el % objetivo del proyecto (`pct_ind_proy`): `🟢 En rango (≤ X%)` vs `🔴 Excedido`.
+  - *Margen de Utilidad*: Semáforo tricolor estricto: `🔴 Pérdida (< 0%)`, `🟡 Bajo meta (X% vs Meta%)`, `🟢 Meta cumplida (≥ Meta%)`.
+  - *Mano de Obra y Materiales*: Comparado contra el presupuesto base pactado del catálogo (`proy_mo_presupuestada` y `proy_mat_presupuestado`): `🔴 Excede pactado (+X%)` / `🔴 Excede costo base (+X%)` / `🟡 Al límite` / `🟢 En control`.
 - **Gráfica de Dona Interactiva (Altair / Vega-Lite)**: Representa los 5 rubros del despacho (Materiales, Mano de Obra, Herramienta, Indirectos, Utilidad) con paleta corporativa y tooltips numéricos limpios.
 - **Opción A (Estricta y Transparente)**: Si el catálogo carece de desglose analítico (APUs en `$0.00`) y no hay destajistas asignados en campo, no simula costos; muestra rubros en `$0.00`, oculta la dona y despliega un aviso informativo contextual.
-- **Nivelación Milimétrica**: Reglas Flexbox en Streamlit y espaciador dinámico de `59px` (o `39px`) que logran alineación inferior exacta a nivel de píxel (**0px de diferencia**).
 
 ### 4.2 `mediciones_engine.py` (Captura en Campo y Generadores)
 - Entrada paramétrica con calculadoras geométricas dinámicas (`m`, `m²` rectangular/triangular/trapecio, `m³`, `kg`, `litros`, `lote`, etc.).
-- Asignación opcional de trabajador destajista desde `personal_obra` e ingreso de jornadas/horas.
+- Distribución visual simétrica al 50/50 para la asignación de responsables y fechas:
+  1. `👷 Destajista / Trabajador responsable`: Selector opcional vinculado a `personal_obra`.
+  2. `📅 Fecha de realización`: Selector de fecha calendario acotado estrictamente al rango de la estimación activa (`periodo_inicio` a `periodo_fin`), con valor por defecto en `periodo_inicio`.
+- Supresión limpia del control manual de jornadas en la UI (el cálculo salarial se consolida automáticamente por fecha calendario en Tab 3 y Tab 1; la columna `horas_o_jornales` en base de datos se mantiene intacta por retrocompatibilidad con valor por defecto `1.0`).
 - Subida múltiple de fotografías y croquis (`accept_multiple_files=True`).
-- Editor interactivo de generadores (`st.data_editor`) con eliminación y recálculo en tiempo real.
+- Editor interactivo de generadores (`st.data_editor`) ordenado cronológicamente por `[Fecha, Trabajador, Clave]`, con edición directa y en tiempo real de `Destajista / Trabajador` y `Fecha` (restringida a los límites del periodo), con persistencia atómica en Supabase.
 
-### 4.3 `estimaciones_engine.py` (Cortes, Raya y Telemetría)
+### 4.3 `estimaciones_engine.py` (Cortes, Liquidación de Pagos y Telemetría)
 - Apertura, edición y cierre de periodos de estimación con control de estados.
-- **Módulo de Liquidación de Raya Semanal**: Calcula los montos devengados por destajista y jornales en el periodo y permite descargar el Recibo Oficial en PDF ReportLab.
-- Telemetría meteorológica automatizada mediante consulta a Open-Meteo.
+- **Barra de Control de Nómina y Mano de Obra (5 KPIs)**:
+  1. `Gran Total Mano de Obra`: Suma total del periodo (Destajos + Jornadas + Mano de Obra sin Asignar).
+  2. `Total por Destajos`: Liquidación devengada a trabajadores por destajo.
+  3. `Total por Jornadas`: Salarios devengados por personal a jornada única por fecha.
+  4. `Mano de Obra sin Asignar`: Costo de mano de obra contemplado en catálogo para mediciones cuantificadas sin trabajador asignado en campo (con tooltip interactivo explicativo).
+  5. `Jornadas Acumuladas`: Días efectivos laborados en el periodo.
+- **Liquidación de Pagos y Control de Destajos**: Estructurado en dos tablas independientes ordenadas jerárquicamente por `[Fecha (asc), Trabajador (A-Z), Clave (A-Z)]`:
+  1. *Relación de Actividades Liquidadas por Destajo*: volumen ejecutado, P.U. de mano de obra contratado y subtotal devengado.
+  2. *Relación de Actividades Liquidadas por Jornada*: días laborados, cuota diaria pactada, consolidación de jornada única por fecha y **Semáforo de Desquite** (`🟢 Desquitado` vs `🔴 En déficit` según el valor de mano de obra entregado vs salario diario).
+- Reporte meteorológico automatizado mediante consulta a Open-Meteo y emisión de cédula y recibos oficiales en PDF.
 
 ### 4.4 `catalogo_engine.py` y `biblioteca_engine.py` (Catálogo y Tabuladores)
 - Soporte **Dual Path**: Permite capturar conceptos de forma simple (P.U. directo) o analítica (APU detallado).

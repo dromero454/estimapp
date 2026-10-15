@@ -504,9 +504,10 @@ def render_bug_tracking_drawer(supabase: Client, user, perfil: dict) -> None:
                         header_d, encoded_d = data_url_d.split(";base64,", 1)
                         b_data_d = base64.b64decode(encoded_d)
                         idx_d = len(st.session_state["drawer_screenshots_pegados"]) + 1
+                        ts_tag = int(datetime.now().timestamp())
                         st.session_state["drawer_screenshots_pegados"].append({
                             "id": str(uuid.uuid4())[:8],
-                            "nombre": f"screenshot_{idx_d}.png",
+                            "nombre": f"screenshot_{idx_d}_{ts_tag}.png",
                             "bytes": b_data_d,
                             "size_kb": round(len(b_data_d) / 1024, 1),
                         })

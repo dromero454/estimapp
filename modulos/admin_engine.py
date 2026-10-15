@@ -7,6 +7,7 @@ Requiere privilegios de Superadministrador (es_admin == True).
 """
 
 import math
+import re
 import time
 from datetime import datetime
 import pandas as pd
@@ -1021,10 +1022,14 @@ def render_admin_dashboard(supabase: Client):
 
                         # Sección B: Capturas de Pantalla e Imágenes (Cuadrícula uniforme encajonada)
                         if imgs_list:
+                            t_up = str(tkt_activo.get("updated_at") or "")
+                            cb_digits = re.sub(r"[^0-9]", "", t_up)
+                            cb_token = cb_digits[-8:] if len(cb_digits) >= 8 else str(int(time.time()))
                             html_galeria.append(f'<div style="font-weight: 600; font-size: 0.88rem; color: #334155; margin-bottom: 8px;">🖼️ Capturas de Pantalla e Imágenes ({len(imgs_list)}):</div>')
                             html_galeria.append('<div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 6px;">')
                             for ruta_adj, nombre_f, ext in imgs_list:
-                                url_pub = supabase.storage.from_("bugs").get_public_url(ruta_adj)
+                                url_base = supabase.storage.from_("bugs").get_public_url(ruta_adj)
+                                url_pub = f"{url_base}?v={cb_token}"
                                 html_galeria.append(
                                     f'<div style="border: 1px solid #e2e8f0; border-radius: 8px; padding: 6px; background: #ffffff; box-shadow: 0 1px 2px rgba(0,0,0,0.04); text-align: center;">'
                                     f'<div style="width: 100%; height: 150px; overflow: hidden; border-radius: 6px; background: #f1f5f9; display: flex; align-items: center; justify-content: center;">'

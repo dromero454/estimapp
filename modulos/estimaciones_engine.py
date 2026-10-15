@@ -372,24 +372,30 @@ def render_estimaciones_tab(supabase, user_id: str, lista_proyectos: list, get_e
         est_obj_raya = estimaciones_proyecto[idx_est_raya]
         meds_raya = get_mediciones(est_obj_raya["id"])
 
-        # Identificar mediciones con trabajador asignado
+        # Identificar mediciones con y sin trabajador asignado
         meds_con_trabajador = [m for m in meds_raya if m.get("id_personal") is not None or m.get("personal_obra")]
+        meds_sin_trabajador = [m for m in meds_raya if not (m.get("id_personal") is not None or m.get("personal_obra"))]
 
-        # Muestra el subpanel si es modalidad privada/mixta o si hay trabajadores asignados
-        debe_mostrar_raya = (modalidad_proy in ["privada", "mixta"]) or (len(meds_con_trabajador) > 0)
+        total_mo_sin_asignar_periodo = 0.0
+        for m in meds_sin_trabajador:
+            c_info = m.get("catalogo_conceptos") or {}
+            pu_mo = float(c_info.get("costo_mano_obra") or 0.0)
+            volumen_m = float(m.get("cantidad_total") or 0.0)
+            total_mo_sin_asignar_periodo += round(volumen_m * pu_mo, 2)
+
+        # Muestra el subpanel si es modalidad privada/mixta o si hay mediciones con o sin trabajador
+        debe_mostrar_raya = (modalidad_proy in ["privada", "mixta"]) or (len(meds_con_trabajador) > 0) or (total_mo_sin_asignar_periodo > 0)
 
         if not debe_mostrar_raya:
             st.info("💡 En proyectos de obra pública tradicional, la liquidación de mano de obra es opcional. Asigna trabajadores a tus mediciones de campo en la Tab de Captura en Campo para habilitar este control.")
         else:
-            if not meds_con_trabajador:
-                st.warning("⚠️ No se registraron mediciones con trabajador/destajista asignado en este periodo de corte.")
+            if not meds_con_trabajador and total_mo_sin_asignar_periodo == 0.0:
+                st.warning("⚠️ No se registraron mediciones con trabajador/destajista asignado ni mano de obra calculada en este periodo de corte.")
             else:
-                # Separar y procesar mediciones: Destajo vs Jornada
+                # Separar y procesar mediciones: Destajo vs Jornada con Fechas Calendario
                 filas_destajos = []
-                agrupado_jornadas = {}
+                raw_acts_jornadas = []
                 total_destajos_periodo = 0.0
-                total_jornadas_monto_periodo = 0.0
-                total_jornadas_cant_periodo = 0.0
 
                 for m in meds_con_trabajador:
                     p_info = m.get("personal_obra") or {}
@@ -407,11 +413,13 @@ def render_estimaciones_tab(supabase, user_id: str, lista_proyectos: list, get_e
                     pu_mo = float(c_info.get("costo_mano_obra") or 0.0)
                     volumen_m = float(m.get("cantidad_total") or 0.0)
                     jornales_m = float(m.get("horas_o_jornales") or 0.0)
+                    fecha_m = str(m.get("fecha") or (m.get("created_at") or ""))[:10]
 
                     if mod_pago == "Por Destajo":
                         importe_dest = round(volumen_m * pu_mo, 2)
                         total_destajos_periodo += importe_dest
                         filas_destajos.append({
+                            "Fecha": fecha_m,
                             "Trabajador": nombre_trab,
                             "Especialidad": especialidad,
                             "Clave": clave_c,
@@ -422,41 +430,85 @@ def render_estimaciones_tab(supabase, user_id: str, lista_proyectos: list, get_e
                             "Total Destajo ($)": importe_dest
                         })
                     else:
-                        # Por Jornada (agrupación consolidada por trabajador en el periodo)
-                        if pid not in agrupado_jornadas:
-                            agrupado_jornadas[pid] = {
-                                "Trabajador": nombre_trab,
-                                "Especialidad": especialidad,
-                                "Jornadas": 0.0,
-                                "Tarifa Base ($)": tarifa_dia,
-                                "Conceptos": set(),
-                                "Total a Pagar ($)": 0.0
-                            }
-                        agrupado_jornadas[pid]["Jornadas"] += jornales_m
-                        agrupado_jornadas[pid]["Conceptos"].add(clave_c)
+                        # Actividad realizada por personal contratado Por Jornada
+                        raw_acts_jornadas.append({
+                            "Fecha": fecha_m,
+                            "pid": pid,
+                            "Trabajador": nombre_trab,
+                            "Especialidad": especialidad,
+                            "Clave": clave_c,
+                            "Concepto": desc_c,
+                            "Unidad": unidad_c,
+                            "Volumen": volumen_m,
+                            "P.U. Mano de Obra ($)": pu_mo,
+                            "Valor M.O. Producido ($)": round(volumen_m * pu_mo, 2),
+                            "Tarifa Base ($)": tarifa_dia,
+                            "horas_o_jornales": jornales_m
+                        })
 
+                # Ordenamiento jerárquico a 3 niveles para Destajos: [Fecha (asc), Trabajador (A-Z), Clave (A-Z)]
+                filas_destajos.sort(key=lambda x: (x["Fecha"], x["Trabajador"], x["Clave"]))
+
+                # Procesamiento de Jornadas: Agrupación por (Fecha, Trabajador) para Semáforo de Desquite y Jornada Única
                 filas_jornadas = []
-                for pid, t_data in agrupado_jornadas.items():
-                    monto_jornada = round(t_data["Jornadas"] * t_data["Tarifa Base ($)"], 2)
-                    t_data["Total a Pagar ($)"] = monto_jornada
-                    total_jornadas_monto_periodo += monto_jornada
-                    total_jornadas_cant_periodo += t_data["Jornadas"]
-                    filas_jornadas.append({
-                        "Trabajador": t_data["Trabajador"],
-                        "Especialidad": t_data["Especialidad"],
-                        "Conceptos Ejecutados": len(t_data["Conceptos"]),
-                        "Jornadas": round(t_data["Jornadas"], 2),
-                        "Tarifa Base ($)": t_data["Tarifa Base ($)"],
-                        "Total a Pagar ($)": monto_jornada
-                    })
+                total_jornadas_monto_periodo = 0.0
+                total_jornadas_cant_periodo = 0.0
 
-                total_general_mo = total_destajos_periodo + total_jornadas_monto_periodo
+                grupos_dias_jor = {}
+                for a in raw_acts_jornadas:
+                    k_dia = (a["Fecha"], a["pid"])
+                    if k_dia not in grupos_dias_jor:
+                        grupos_dias_jor[k_dia] = []
+                    grupos_dias_jor[k_dia].append(a)
 
-                col_r1, col_r2, col_r3, col_r4 = st.columns(4)
+                claves_grupos_ordenadas = sorted(
+                    grupos_dias_jor.keys(),
+                    key=lambda k: (k[0], grupos_dias_jor[k][0]["Trabajador"])
+                )
+
+                for k_dia in claves_grupos_ordenadas:
+                    acts_dia = grupos_dias_jor[k_dia]
+                    acts_dia.sort(key=lambda x: x["Clave"])
+
+                    tarifa_dia = acts_dia[0]["Tarifa Base ($)"]
+                    total_valor_dia = sum(x["Valor M.O. Producido ($)"] for x in acts_dia)
+                    ratio_desquite = (total_valor_dia / tarifa_dia * 100.0) if tarifa_dia > 0 else (100.0 if total_valor_dia > 0 else 0.0)
+                    desquito = (total_valor_dia >= tarifa_dia)
+                    badge_desquite = f"🟢 Desquitado ({ratio_desquite:.0f}%)" if desquito else f"🔴 En déficit ({ratio_desquite:.0f}%)"
+
+                    total_jornadas_monto_periodo += tarifa_dia
+                    total_jornadas_cant_periodo += 1.0
+
+                    for idx_act, act in enumerate(acts_dia):
+                        filas_jornadas.append({
+                            "Fecha": act["Fecha"],
+                            "Trabajador": act["Trabajador"],
+                            "Especialidad": act["Especialidad"],
+                            "Clave": act["Clave"],
+                            "Concepto": act["Concepto"],
+                            "Volumen": act["Volumen"],
+                            "Unidad": act["Unidad"],
+                            "Valor M.O. Producido ($)": act["Valor M.O. Producido ($)"],
+                            "Salario Diario ($)": tarifa_dia if idx_act == 0 else None,
+                            "Estatus de Desquite": badge_desquite if idx_act == 0 else ""
+                        })
+
+                total_liquidado_periodo = total_destajos_periodo + total_jornadas_monto_periodo
+                total_general_mo = total_liquidado_periodo + total_mo_sin_asignar_periodo
+
+                col_r1, col_r2, col_r3, col_r4, col_r5 = st.columns(5)
                 col_r1.metric("Gran Total Mano de Obra", f"${total_general_mo:,.2f} MXN")
                 col_r2.metric("Total por Destajos", f"${total_destajos_periodo:,.2f} MXN")
                 col_r3.metric("Total por Jornadas", f"${total_jornadas_monto_periodo:,.2f} MXN")
-                col_r4.metric("Jornadas Acumuladas", f"{total_jornadas_cant_periodo:.2f}")
+                col_r4.metric(
+                    "Mano de Obra sin Asignar",
+                    f"${total_mo_sin_asignar_periodo:,.2f} MXN",
+                    help="💡 Costo de mano de obra contemplado en el catálogo para mediciones cuantificadas en este periodo que aún no tienen un trabajador o cuadrilla responsable asignado. Asigna al personal en 'Captura en Campo' para reflejarlo en la nómina liquidable."
+                )
+                col_r5.metric("Jornadas Acumuladas", f"{total_jornadas_cant_periodo:.2f}")
+
+                if total_mo_sin_asignar_periodo > 0:
+                    st.info(f"💡 Se registraron **\${total_mo_sin_asignar_periodo:,.2f} MXN** de mano de obra en conceptos cuantificados sin trabajador asignado. Para incluirlos formalmente en las tablas de liquidación y en el recibo oficial PDF, asigna a un destajista o trabajador en la pestaña **Captura en Campo**.")
 
                 # =============================================================
                 # TABLA 1: ACTIVIDADES POR DESTAJO (SUPERIOR)
@@ -467,16 +519,17 @@ def render_estimaciones_tab(supabase, user_id: str, lista_proyectos: list, get_e
                     df_dest = pd.DataFrame(filas_destajos)
                     df_dest.insert(0, "#", range(1, len(df_dest) + 1))
                     st.dataframe(
-                        df_dest[["#", "Trabajador", "Clave", "Concepto", "Unidad", "Volumen", "P.U. Mano de Obra ($)", "Total Destajo ($)"]],
+                        df_dest[["#", "Fecha", "Trabajador", "Clave", "Concepto", "Unidad", "Volumen", "P.U. Mano de Obra ($)", "Total Destajo ($)"]],
                         column_config={
-                            "#": st.column_config.NumberColumn("#", width=50),
-                            "Trabajador": st.column_config.TextColumn("Trabajador", width=160),
-                            "Clave": st.column_config.TextColumn("Clave", width=95),
-                            "Concepto": st.column_config.TextColumn("Concepto", width=240),
-                            "Unidad": st.column_config.TextColumn("Unidad", width=70),
-                            "Volumen": st.column_config.NumberColumn("Volumen", format="%.3f", width=90),
-                            "P.U. Mano de Obra ($)": st.column_config.NumberColumn("P.U. Mano Obra", format="$%.2f", width=120),
-                            "Total Destajo ($)": st.column_config.NumberColumn("Total Destajo ($)", format="$%.2f", width=130),
+                            "#": st.column_config.NumberColumn("#", width=45),
+                            "Fecha": st.column_config.DateColumn("Fecha", format="YYYY-MM-DD", width=105),
+                            "Trabajador": st.column_config.TextColumn("Trabajador", width=150),
+                            "Clave": st.column_config.TextColumn("Clave", width=85),
+                            "Concepto": st.column_config.TextColumn("Concepto", width=220),
+                            "Unidad": st.column_config.TextColumn("Unidad", width=65),
+                            "Volumen": st.column_config.NumberColumn("Volumen", format="%.3f", width=85),
+                            "P.U. Mano de Obra ($)": st.column_config.NumberColumn("P.U. Mano Obra", format="$%.2f", width=115),
+                            "Total Destajo ($)": st.column_config.NumberColumn("Total Destajo ($)", format="$%.2f", width=125),
                         },
                         use_container_width=True,
                         hide_index=True
@@ -488,20 +541,24 @@ def render_estimaciones_tab(supabase, user_id: str, lista_proyectos: list, get_e
                 # TABLA 2: ACTIVIDADES POR JORNADA (INFERIOR)
                 # =============================================================
                 st.markdown("<div style='height: 6px;'></div>", unsafe_allow_html=True)
-                st.markdown("###### ⏱️ Relación de Actividades Liquidadas por Jornada")
+                st.markdown("###### ⏱️ Relación de Actividades Liquidadas por Jornada y Semáforo de Desquite")
                 if filas_jornadas:
                     df_jor = pd.DataFrame(filas_jornadas)
                     df_jor.insert(0, "#", range(1, len(df_jor) + 1))
                     st.dataframe(
-                        df_jor[["#", "Trabajador", "Especialidad", "Conceptos Ejecutados", "Jornadas", "Tarifa Base ($)", "Total a Pagar ($)"]],
+                        df_jor[["#", "Fecha", "Trabajador", "Especialidad", "Clave", "Concepto", "Volumen", "Unidad", "Valor M.O. Producido ($)", "Salario Diario ($)", "Estatus de Desquite"]],
                         column_config={
-                            "#": st.column_config.NumberColumn("#", width=50),
-                            "Trabajador": st.column_config.TextColumn("Trabajador", width=170),
-                            "Especialidad": st.column_config.TextColumn("Especialidad", width=120),
-                            "Conceptos Ejecutados": st.column_config.NumberColumn("Conceptos", width=95),
-                            "Jornadas": st.column_config.NumberColumn("Jornadas", format="%.2f", width=95),
-                            "Tarifa Base ($)": st.column_config.NumberColumn("Tarifa por Jornada ($)", format="$%.2f", width=130),
-                            "Total a Pagar ($)": st.column_config.NumberColumn("Total a Pagar ($)", format="$%.2f", width=130),
+                            "#": st.column_config.NumberColumn("#", width=45),
+                            "Fecha": st.column_config.DateColumn("Fecha", format="YYYY-MM-DD", width=105),
+                            "Trabajador": st.column_config.TextColumn("Trabajador", width=145),
+                            "Especialidad": st.column_config.TextColumn("Especialidad", width=105),
+                            "Clave": st.column_config.TextColumn("Clave", width=80),
+                            "Concepto": st.column_config.TextColumn("Concepto", width=190),
+                            "Volumen": st.column_config.NumberColumn("Volumen", format="%.3f", width=80),
+                            "Unidad": st.column_config.TextColumn("Unidad", width=60),
+                            "Valor M.O. Producido ($)": st.column_config.NumberColumn("Valor M.O. Producido ($)", format="$%.2f", width=125),
+                            "Salario Diario ($)": st.column_config.NumberColumn("Salario Diario ($)", format="$%.2f", width=115),
+                            "Estatus de Desquite": st.column_config.TextColumn("Estatus de Desquite", width=160),
                         },
                         use_container_width=True,
                         hide_index=True
@@ -510,7 +567,7 @@ def render_estimaciones_tab(supabase, user_id: str, lista_proyectos: list, get_e
                     st.warning("⚠️ No se registraron jornadas laboradas en este periodo de corte.")
 
                 # Descarga Oficial del Recibo de Liquidación de Pagos en PDF
-                pdf_pagos_bytes = generar_pdf_recibo_pagos(proy_obj_actual, est_obj_raya, filas_destajos, filas_jornadas, total_general_mo)
+                pdf_pagos_bytes = generar_pdf_recibo_pagos(proy_obj_actual, est_obj_raya, filas_destajos, filas_jornadas, total_liquidado_periodo)
                 contrato_nom = proy_obj_actual.get('contrato_no') or 'Obra'
                 st.download_button(
                     label="📄 Descargar Recibo de Liquidación (PDF)",

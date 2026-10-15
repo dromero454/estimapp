@@ -158,6 +158,7 @@ Directorio de mano de obra, destajistas y cuadrillas del despacho.
 | `nombre` | `TEXT` | NO | — | — | Nombre completo del trabajador o maestro. |
 | `especialidad` | `TEXT` | SÍ | `'Albañilería'` | — | Oficio (`Albañilería`, `Pintura`, `Plomería`, etc.). |
 | `costo_jornal_base` | `NUMERIC` | SÍ | `0` | — | Tarifa pactada por día / jornada en MXN. |
+| `modalidad_pago` | `TEXT` | SÍ | `'Por Destajo'` | CHECK (`'Por Destajo'`, `'Por Jornada'`) | Esquema contractual (`Por Destajo`, `Por Jornada`). |
 | `telefono` | `TEXT` | SÍ | `NULL` | — | Teléfono de contacto. |
 | `created_at` | `TIMESTAMPTZ` | SÍ | `now()` | — | Fecha de registro. |
 
@@ -242,8 +243,9 @@ Números generadores de obra cuantificados en campo.
 | `id` | `BIGINT` | NO | `nextval(...)` | PK | Identificador del generador. |
 | `id_estimacion` | `BIGINT` | NO | — | FK a `estimaciones(id)` ON DELETE CASCADE | Estimación en la que se cobra. |
 | `id_concepto` | `BIGINT` | NO | — | FK a `catalogo_conceptos(id)` ON DELETE CASCADE | Concepto cuantificado. |
-| `id_personal` | `BIGINT` | SÍ | `NULL` | FK a `personal_obra(id)` ON DELETE SET NULL | Destajista responsable (Raya semanal). |
-| `horas_o_jornales`| `NUMERIC` | SÍ | `1.0` | — | Jornales o esfuerzo invertido en la tarea. |
+| `fecha` | `DATE` | SÍ | `CURRENT_DATE` | — | Fecha calendario de realización de la actividad (acotada al periodo). |
+| `id_personal` | `BIGINT` | SÍ | `NULL` | FK a `personal_obra(id)` ON DELETE SET NULL | Destajista o trabajador responsable. |
+| `horas_o_jornales`| `NUMERIC` | SÍ | `1.0` | — | Jornadas registradas (conservado en esquema BD con default `1.0`; la UI consolida salario diario por fecha calendario). |
 | `localizacion` | `TEXT` | SÍ | `NULL` | — | Elemento o área física (ej. Muro Norte PB). |
 | `eje` | `TEXT` | SÍ | `NULL` | — | Ejes arquitectónicos (ej. A-C). |
 | `tramo` | `TEXT` | SÍ | `NULL` | — | Tramos estructurales (ej. 1-4). |

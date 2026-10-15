@@ -117,8 +117,13 @@ def generar_pdf_recibo_pagos(
 
     # KPIs de Liquidación
     total_destajos = sum(float(r.get("Total Destajo ($)", 0.0)) for r in filas_destajos)
-    total_jornadas = sum(float(r.get("Total a Pagar ($)", 0.0)) for r in filas_jornadas)
-    total_dias = sum(float(r.get("Jornadas", 0.0)) for r in filas_jornadas)
+    has_salario_diario = any("Salario Diario ($)" in r for r in filas_jornadas)
+    if has_salario_diario:
+        total_jornadas = sum(float(r.get("Salario Diario ($)") or 0.0) for r in filas_jornadas if r.get("Salario Diario ($)") is not None)
+        total_dias = sum(1.0 for r in filas_jornadas if r.get("Salario Diario ($)") is not None)
+    else:
+        total_jornadas = sum(float(r.get("Total a Pagar ($)", 0.0)) for r in filas_jornadas)
+        total_dias = sum(float(r.get("Jornadas", 0.0)) for r in filas_jornadas)
 
     kpi_data = [
         [
@@ -146,21 +151,24 @@ def generar_pdf_recibo_pagos(
         dest_rows = [
             [
                 Paragraph("<para align=center>#</para>", table_head),
+                Paragraph("<para align=center>Fecha</para>", table_head),
                 Paragraph("Trabajador", table_head),
                 Paragraph("Clave", table_head),
                 Paragraph("Concepto", table_head),
                 Paragraph("<para align=center>Unidad</para>", table_head),
                 Paragraph("<para align=right>Volumen</para>", table_head),
-                Paragraph("<para align=right>P.U. Mano Obra ($)</para>", table_head),
+                Paragraph("<para align=right>P.U. M.O. ($)</para>", table_head),
                 Paragraph("<para align=right>Total Destajo ($)</para>", table_head)
             ]
         ]
         for idx, r in enumerate(filas_destajos, start=1):
             c_desc = str(r.get("Concepto", ""))
-            if len(c_desc) > 35:
-                c_desc = c_desc[:33] + "..."
+            if len(c_desc) > 32:
+                c_desc = c_desc[:30] + "..."
+            fecha_str = str(r.get("Fecha", ""))
             dest_rows.append([
                 Paragraph(f"<para align=center>{idx}</para>", table_text),
+                Paragraph(f"<para align=center>{fecha_str}</para>", table_text),
                 Paragraph(f"{r.get('Trabajador', '')}", table_text),
                 Paragraph(f"{r.get('Clave', '')}", table_text),
                 Paragraph(c_desc, table_text),
@@ -171,6 +179,7 @@ def generar_pdf_recibo_pagos(
             ])
         dest_rows.append([
             Paragraph("", table_text),
+            Paragraph("", table_text),
             Paragraph("<b>TOTAL DESTAJOS:</b>", table_text),
             Paragraph("", table_text),
             Paragraph("", table_text),
@@ -179,7 +188,7 @@ def generar_pdf_recibo_pagos(
             Paragraph("", table_text),
             Paragraph(f"<para align=right><font color='#0288D1'><b>${total_destajos:,.2f}</b></font></para>", table_text)
         ])
-        t_dest = Table(dest_rows, colWidths=[20, 100, 55, 140, 35, 55, 65, 70], repeatRows=1)
+        t_dest = Table(dest_rows, colWidths=[20, 52, 95, 45, 138, 30, 45, 55, 60], repeatRows=1)
         t_dest.setStyle(TableStyle([
             ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1A2530")),
             ('INNERGRID', (0,0), (-1,-2), 0.5, colors.HexColor("#E2E8F0")),
@@ -199,36 +208,94 @@ def generar_pdf_recibo_pagos(
     # =============================================================
     # TABLA 2: ACTIVIDADES POR JORNADA (INFERIOR)
     # =============================================================
-    story.append(Paragraph("<b>2. RELACIÓN DE ACTIVIDADES LIQUIDADAS POR JORNADA</b>", section_h_style))
+    story.append(Paragraph("<b>2. RELACIÓN DE ACTIVIDADES LIQUIDADAS POR JORNADA Y DESQUITE</b>", section_h_style))
     if filas_jornadas:
-        jor_rows = [
-            [
-                Paragraph("<para align=center>#</para>", table_head),
-                Paragraph("Trabajador", table_head),
-                Paragraph("Especialidad / Rol", table_head),
-                Paragraph("<para align=right>Jornadas Trabajadas</para>", table_head),
-                Paragraph("<para align=right>Tarifa por Jornada ($)</para>", table_head),
-                Paragraph("<para align=right>Total a Pagar ($)</para>", table_head)
+        if has_salario_diario:
+            jor_rows = [
+                [
+                    Paragraph("<para align=center>#</para>", table_head),
+                    Paragraph("<para align=center>Fecha</para>", table_head),
+                    Paragraph("Trabajador", table_head),
+                    Paragraph("Especialidad", table_head),
+                    Paragraph("Clave", table_head),
+                    Paragraph("Concepto", table_head),
+                    Paragraph("<para align=right>Valor M.O. ($)</para>", table_head),
+                    Paragraph("<para align=right>Salario D. ($)</para>", table_head),
+                    Paragraph("<para align=center>Estatus</para>", table_head)
+                ]
             ]
-        ]
-        for idx, r in enumerate(filas_jornadas, start=1):
+            for idx, r in enumerate(filas_jornadas, start=1):
+                c_desc = str(r.get("Concepto", ""))
+                if len(c_desc) > 28:
+                    c_desc = c_desc[:26] + "..."
+                fecha_str = str(r.get("Fecha", ""))
+                sd_val = r.get("Salario Diario ($)")
+                sd_str = f"${float(sd_val):,.2f}" if (sd_val is not None and str(sd_val).strip() != "") else ""
+
+                est_raw = str(r.get("Estatus de Desquite", ""))
+                if "Desquitado" in est_raw:
+                    ratio_str = est_raw.replace("🟢", "").strip()
+                    est_html = f"<font color='#00875A'><b>{ratio_str}</b></font>"
+                elif "déficit" in est_raw or "deficit" in est_raw:
+                    ratio_str = est_raw.replace("🔴", "").strip()
+                    est_html = f"<font color='#DC2626'><b>{ratio_str}</b></font>"
+                else:
+                    est_html = est_raw
+
+                val_mo = float(r.get("Valor M.O. Producido ($)", 0.0))
+                jor_rows.append([
+                    Paragraph(f"<para align=center>{idx}</para>", table_text),
+                    Paragraph(f"<para align=center>{fecha_str}</para>", table_text),
+                    Paragraph(f"{r.get('Trabajador', '')}", table_text),
+                    Paragraph(f"{r.get('Especialidad', '')}", table_text),
+                    Paragraph(f"{r.get('Clave', '')}", table_text),
+                    Paragraph(c_desc, table_text),
+                    Paragraph(f"<para align=right>${val_mo:,.2f}</para>", table_text),
+                    Paragraph(f"<para align=right><b>{sd_str}</b></para>", table_text),
+                    Paragraph(f"<para align=center>{est_html}</para>", table_text)
+                ])
             jor_rows.append([
-                Paragraph(f"<para align=center>{idx}</para>", table_text),
-                Paragraph(f"{r.get('Trabajador', '')}", table_text),
-                Paragraph(f"{r.get('Especialidad', '')}", table_text),
-                Paragraph(f"<para align=right>{float(r.get('Jornadas', 0)):.2f}</para>", table_text),
-                Paragraph(f"<para align=right>${float(r.get('Tarifa Base ($)', 0)):,.2f}</para>", table_text),
-                Paragraph(f"<para align=right><b>${float(r.get('Total a Pagar ($)', 0)):,.2f}</b></para>", table_text)
+                Paragraph("", table_text),
+                Paragraph("", table_text),
+                Paragraph("<b>TOTAL JORNADAS:</b>", table_text),
+                Paragraph("", table_text),
+                Paragraph("", table_text),
+                Paragraph(f"<para align=center><b>({total_dias:.1f} jor)</b></para>", table_text),
+                Paragraph("", table_text),
+                Paragraph(f"<para align=right><font color='#D97706'><b>${total_jornadas:,.2f}</b></font></para>", table_text),
+                Paragraph("", table_text)
             ])
-        jor_rows.append([
-            Paragraph("", table_text),
-            Paragraph("<b>TOTAL JORNADAS:</b>", table_text),
-            Paragraph("", table_text),
-            Paragraph(f"<para align=right><b>{total_dias:.2f}</b></para>", table_text),
-            Paragraph("", table_text),
-            Paragraph(f"<para align=right><font color='#D97706'><b>${total_jornadas:,.2f}</b></font></para>", table_text)
-        ])
-        t_jor = Table(jor_rows, colWidths=[25, 160, 115, 80, 80, 80], repeatRows=1)
+            t_jor = Table(jor_rows, colWidths=[20, 50, 95, 65, 45, 115, 50, 50, 50], repeatRows=1)
+        else:
+            jor_rows = [
+                [
+                    Paragraph("<para align=center>#</para>", table_head),
+                    Paragraph("Trabajador", table_head),
+                    Paragraph("Especialidad / Rol", table_head),
+                    Paragraph("<para align=right>Jornadas Trabajadas</para>", table_head),
+                    Paragraph("<para align=right>Tarifa por Jornada ($)</para>", table_head),
+                    Paragraph("<para align=right>Total a Pagar ($)</para>", table_head)
+                ]
+            ]
+            for idx, r in enumerate(filas_jornadas, start=1):
+                jor_rows.append([
+                    Paragraph(f"<para align=center>{idx}</para>", table_text),
+                    Paragraph(f"{r.get('Trabajador', '')}", table_text),
+                    Paragraph(f"{r.get('Especialidad', '')}", table_text),
+                    Paragraph(f"<para align=right>{float(r.get('Jornadas', 0)):.2f}</para>", table_text),
+                    Paragraph(f"<para align=right>${float(r.get('Tarifa Base ($)', 0)):,.2f}</para>", table_text),
+                    Paragraph(f"<para align=right><b>${float(r.get('Total a Pagar ($)', 0)):,.2f}</b></para>", table_text)
+                ])
+            jor_rows.append([
+                Paragraph("", table_text),
+                Paragraph("<b>TOTAL JORNADAS:</b>", table_text),
+                Paragraph("", table_text),
+                Paragraph(f"<para align=right><b>{total_dias:.2f}</b></para>", table_text),
+                Paragraph("", table_text),
+                Paragraph(f"<para align=right><font color='#D97706'><b>${total_jornadas:,.2f}</b></font></para>", table_text)
+            ])
+            t_jor = Table(jor_rows, colWidths=[25, 160, 115, 80, 80, 80], repeatRows=1)
+
         t_jor.setStyle(TableStyle([
             ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1A2530")),
             ('INNERGRID', (0,0), (-1,-2), 0.5, colors.HexColor("#E2E8F0")),
@@ -265,7 +332,13 @@ def generar_pdf_recibo_pagos(
         t_esp = j.get("Especialidad", "Jornada")
         if t_nom not in trabajadores_resumen:
             trabajadores_resumen[t_nom] = {"nombre": t_nom, "especialidad": t_esp, "total": 0.0}
-        trabajadores_resumen[t_nom]["total"] += float(j.get("Total a Pagar ($)", 0.0))
+        
+        if has_salario_diario:
+            sd = j.get("Salario Diario ($)")
+            if sd is not None:
+                trabajadores_resumen[t_nom]["total"] += float(sd)
+        else:
+            trabajadores_resumen[t_nom]["total"] += float(j.get("Total a Pagar ($)", 0.0))
 
     receipt_rows = []
     for t_nom, t_data in trabajadores_resumen.items():

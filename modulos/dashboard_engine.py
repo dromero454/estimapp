@@ -56,7 +56,16 @@ def render_dashboard_tab(supabase, user_id: str, lista_proyectos: list, get_conc
         float(c.get("cantidad_contratada") or 0.0) * float(c.get("costo_mano_obra") or 0.0)
         for c in conceptos_dash
     )
+    proy_mat_presupuestado = sum(
+        float(c.get("cantidad_contratada") or 0.0) * float(c.get("costo_material") or 0.0)
+        for c in conceptos_dash
+    )
+    proy_herr_presupuestada = sum(
+        float(c.get("cantidad_contratada") or 0.0) * float(c.get("costo_herramienta") or 0.0)
+        for c in conceptos_dash
+    )
 
+    dias_jornadas_vistos = set()
     for e in estimaciones_dash:
         meds = get_mediciones(e["id"])
         for m in meds:
@@ -78,12 +87,19 @@ def render_dashboard_tab(supabase, user_id: str, lista_proyectos: list, get_conc
                 costo_herramienta_erogado += (cant * c_herr)
                 costo_indirectos_erogado += (cant * c_ind)
 
-                # Si la medición tiene destajista asignado, computa su tarifa base real
+                # Computa la mano de obra erogada según modalidad del personal
                 p_info = m.get("personal_obra")
                 if m.get("id_personal") and p_info:
-                    jornales_m = float(m.get("horas_o_jornales") or 1.0)
-                    tarifa_j = float(p_info.get("costo_jornal_base") or 0.0)
-                    total_destajos_pagados += (jornales_m * tarifa_j)
+                    p_mod = p_info.get("modalidad_pago") or "Por Destajo"
+                    if p_mod == "Por Jornada":
+                        f_dia = str(m.get("fecha") or (m.get("created_at") or ""))[:10]
+                        k_dia = (e["id"], f_dia, m.get("id_personal"))
+                        if k_dia not in dias_jornadas_vistos:
+                            dias_jornadas_vistos.add(k_dia)
+                            tarifa_j = float(p_info.get("costo_jornal_base") or 0.0)
+                            total_destajos_pagados += tarifa_j
+                    else:
+                        total_destajos_pagados += (cant * c_mo)
                 else:
                     total_destajos_pagados += (cant * c_mo)
 
@@ -94,6 +110,9 @@ def render_dashboard_tab(supabase, user_id: str, lista_proyectos: list, get_conc
     pct_ind_proy = float(proy_obj_actual.get("porcentaje_indirectos") or 15.0)
     pct_util_proy = float(proy_obj_actual.get("porcentaje_utilidad") or 15.0)
     pct_herr_proy = float(proy_obj_actual.get("porcentaje_herramienta") or 5.0)
+    pct_iva_proy = float(proy_obj_actual.get("porcentaje_iva") or 0.0)
+    monto_iva_global = round(monto_estimado_global * (pct_iva_proy / 100.0), 2) if pct_iva_proy > 0 else 0.0
+    total_con_iva_global = round(monto_estimado_global + monto_iva_global, 2)
 
     suma_analitica_erogada = costo_materiales_erogado + total_destajos_pagados + costo_herramienta_erogado + costo_indirectos_erogado
     hay_desglose_analitico = (suma_analitica_erogada > 0)
@@ -247,49 +266,69 @@ def render_dashboard_tab(supabase, user_id: str, lista_proyectos: list, get_conc
             strokeWidth=0
         )
 
-    # Helper para calcular la distribución de costos por periodo o acumulada (BUG-013)
+    # Pre-cálculo de costos analíticos por periodo de estimación
+    costos_por_est = {}
+    for e_item in estimaciones_dash:
+        num_p = e_item["num_periodo"]
+        meds_p = get_mediciones(e_item["id"])
+        c_mat_p, c_mo_p, c_herr_p, c_ind_p, monto_est_p = 0.0, 0.0, 0.0, 0.0, 0.0
+        dias_jornadas_est = set()
+        for m in meds_p:
+            c_id = m.get("id_concepto")
+            cant = float(m.get("cantidad_total") or 0.0)
+            if c_id in dict_conceptos_info:
+                c_info = dict_conceptos_info[c_id]
+                pu = float(c_info.get("precio_unitario") or 0.0)
+                monto_est_p += (cant * pu)
+                c_mat_p += (cant * float(c_info.get("costo_material") or 0.0))
+                c_herr_p += (cant * float(c_info.get("costo_herramienta") or 0.0))
+                c_ind_p += (cant * float(c_info.get("costo_indirecto") or 0.0))
+                
+                p_info = m.get("personal_obra")
+                if m.get("id_personal") and p_info:
+                    p_mod = p_info.get("modalidad_pago") or "Por Destajo"
+                    if p_mod == "Por Jornada":
+                        f_dia = str(m.get("fecha") or (m.get("created_at") or ""))[:10]
+                        k_dia = (f_dia, m.get("id_personal"))
+                        if k_dia not in dias_jornadas_est:
+                            dias_jornadas_est.add(k_dia)
+                            c_mo_p += float(p_info.get("costo_jornal_base") or 0.0)
+                    else:
+                        c_mo_p += (cant * float(c_info.get("costo_mano_obra") or 0.0))
+                else:
+                    c_mo_p += (cant * float(c_info.get("costo_mano_obra") or 0.0))
+
+        gasto_erog_p = c_mat_p + c_mo_p + c_herr_p + c_ind_p
+        c_util_p = round(max(0.0, monto_est_p - gasto_erog_p), 2) if gasto_erog_p > 0 else 0.0
+        costos_por_est[num_p] = {
+            "mat": c_mat_p,
+            "mo": c_mo_p,
+            "herr": c_herr_p,
+            "ind": c_ind_p,
+            "util": c_util_p,
+            "monto": monto_est_p
+        }
+
+    # Helper para calcular la distribución de costos por periodo o acumulada con columna Estatus dinámica
     def _calcular_df_distribucion(sel_filtro):
-        if sel_filtro == "Total Acumulado" or not estimaciones_dash:
-            c_mat = max(0.0, costo_materiales_erogado)
-            c_mo = max(0.0, total_destajos_pagados)
-            c_herr = max(0.0, costo_herramienta_erogado)
-            c_ind = max(0.0, costo_indirectos_erogado)
-            c_util = max(0.0, utilidad_bruta_real)
+        if sel_filtro == "Total Acumulado":
+            c_mat = sum(v["mat"] for v in costos_por_est.values())
+            c_mo = sum(v["mo"] for v in costos_por_est.values())
+            c_herr = sum(v["herr"] for v in costos_por_est.values())
+            c_ind = sum(v["ind"] for v in costos_por_est.values())
+            c_util = sum(v["util"] for v in costos_por_est.values())
+            c_mat_eval = c_mat
+            c_mo_eval = c_mo
         else:
             num_p = int(sel_filtro.replace("Estimación #", "").strip())
-            est_obj = next((e for e in estimaciones_dash if e["num_periodo"] == num_p), None)
-            if est_obj:
-                meds_p = get_mediciones(est_obj["id"])
-                c_mat = 0.0
-                c_mo = 0.0
-                c_herr = 0.0
-                c_ind = 0.0
-                monto_est_p = 0.0
-                for m in meds_p:
-                    c_id = m.get("id_concepto")
-                    cant = float(m.get("cantidad_total") or 0.0)
-                    if c_id in dict_conceptos_info:
-                        c_info = dict_conceptos_info[c_id]
-                        pu = float(c_info.get("precio_unitario") or 0.0)
-                        monto_est_p += (cant * pu)
-                        c_mat += (cant * float(c_info.get("costo_material") or 0.0))
-                        c_herr += (cant * float(c_info.get("costo_herramienta") or 0.0))
-                        c_ind += (cant * float(c_info.get("costo_indirecto") or 0.0))
-                        
-                        p_info = m.get("personal_obra")
-                        if m.get("id_personal") and p_info:
-                            p_mod = p_info.get("modalidad_pago") or "Por Destajo"
-                            if p_mod == "Por Jornada":
-                                c_mo += (float(m.get("horas_o_jornales") or 1.0) * float(p_info.get("costo_jornal_base") or 0.0))
-                            else:
-                                c_mo += (cant * float(c_info.get("costo_mano_obra") or 0.0))
-                        else:
-                            c_mo += (cant * float(c_info.get("costo_mano_obra") or 0.0))
-
-                gasto_erog_p = c_mat + c_mo + c_herr + c_ind
-                c_util = round(max(0.0, monto_est_p - gasto_erog_p), 2) if gasto_erog_p > 0 else 0.0
-            else:
-                c_mat, c_mo, c_herr, c_ind, c_util = 0.0, 0.0, 0.0, 0.0, 0.0
+            datos_p = costos_por_est.get(num_p, {"mat": 0.0, "mo": 0.0, "herr": 0.0, "ind": 0.0, "util": 0.0})
+            c_mat = datos_p["mat"]
+            c_mo = datos_p["mo"]
+            c_herr = datos_p["herr"]
+            c_ind = datos_p["ind"]
+            c_util = datos_p["util"]
+            c_mat_eval = sum(v["mat"] for k, v in costos_por_est.items() if k <= num_p)
+            c_mo_eval = sum(v["mo"] for k, v in costos_por_est.items() if k <= num_p)
 
         df_res = pd.DataFrame({
             "Rubro": ["Materiales", "Mano de Obra / Destajos", "Herramienta y Equipo", "Gastos Indirectos", "Margen de Utilidad"],
@@ -298,6 +337,54 @@ def render_dashboard_tab(supabase, user_id: str, lista_proyectos: list, get_conc
         t_dist = df_res["Importe"].sum()
         df_res["Porcentaje"] = (df_res["Importe"] / t_dist * 100.0).round(1) if t_dist > 0 else 0.0
         df_res["Participacion"] = df_res["Porcentaje"].apply(lambda p: f"{p:.1f}%")
+
+        if t_dist == 0:
+            df_res["Estatus"] = ["⚪ Sin movimientos"] * 5
+            return df_res
+
+        # 1. Materiales (evaluado contra costo base presupuestado)
+        if proy_mat_presupuestado > 0:
+            if c_mat_eval > proy_mat_presupuestado:
+                est_mat = f"🔴 Excedido (Presup: ${proy_mat_presupuestado:,.2f})"
+            else:
+                est_mat = f"🟢 En rango (Presup: ${proy_mat_presupuestado:,.2f})"
+        else:
+            est_mat = "⚪ Sin costo base"
+
+        # 2. Mano de Obra (evaluado contra presupuesto pactado)
+        if proy_mo_presupuestada > 0:
+            if c_mo_eval > proy_mo_presupuestada:
+                est_mo = f"🔴 Excedido (Presup: ${proy_mo_presupuestada:,.2f})"
+            else:
+                est_mo = f"🟢 En rango (Presup: ${proy_mo_presupuestada:,.2f})"
+        else:
+            est_mo = "⚪ Sin presupuesto pactado"
+
+        # 3. Herramienta y Equipo (evaluado contra porcentaje objetivo del proyecto)
+        pct_herr_act = float(df_res.loc[df_res["Rubro"] == "Herramienta y Equipo", "Porcentaje"].values[0])
+        if pct_herr_act <= pct_herr_proy:
+            est_herr = f"🟢 En rango (Meta: ≤ {pct_herr_proy:.1f}%)"
+        else:
+            est_herr = f"🔴 Excedido (Meta: {pct_herr_proy:.1f}%)"
+
+        # 4. Gastos Indirectos (evaluado contra porcentaje objetivo del proyecto)
+        pct_ind_act = float(df_res.loc[df_res["Rubro"] == "Gastos Indirectos", "Porcentaje"].values[0])
+        if pct_ind_act <= pct_ind_proy:
+            est_ind = f"🟢 En rango (Meta: ≤ {pct_ind_proy:.1f}%)"
+        else:
+            est_ind = f"🔴 Excedido (Meta: {pct_ind_proy:.1f}%)"
+
+        # 5. Margen de Utilidad (3 colores: Rojo si < 0, Amarillo si 0 <= margen < meta, Verde si >= meta)
+        pct_util_act = float(df_res.loc[df_res["Rubro"] == "Margen de Utilidad", "Porcentaje"].values[0])
+        imp_util_act = float(df_res.loc[df_res["Rubro"] == "Margen de Utilidad", "Importe"].values[0])
+        if imp_util_act <= 0 or pct_util_act <= 0:
+            est_util = f"🔴 Pérdida ({pct_util_act:.1f}%)"
+        elif pct_util_act < pct_util_proy:
+            est_util = f"🟡 Bajo meta (Meta: {pct_util_proy:.1f}%)"
+        else:
+            est_util = f"🟢 En meta (Meta: ≥ {pct_util_proy:.1f}%)"
+
+        df_res["Estatus"] = [est_mat, est_mo, est_herr, est_ind, est_util]
         return df_res
 
     # Distribución global inicial
@@ -319,26 +406,127 @@ def render_dashboard_tab(supabase, user_id: str, lista_proyectos: list, get_conc
     elif modalidad_proy == "privada":
         # ---------------- MODO OBRA PRIVADA (RENTABILIDAD INTERNA) ----------------
         with st.container(border=True):
-            st.markdown("##### 🏛️ Resumen Global del Proyecto")
-            kpi1, kpi_rep, kpi2, kpi3, kpi4 = st.columns(5)
-            kpi1.metric("Presupuesto Pactado", f"${monto_contratado_total:,.2f}")
-            kpi_rep.metric("Gasto Reportable", f"${monto_estimado_global:,.2f}", help="Total acumulado cobrable al cliente amparado en las estimaciones abiertas con utilidad.")
-            kpi2.metric("Gasto Erogado Real", f"${gasto_erogado_real:,.2f}", delta=f"-${gasto_erogado_real:,.2f}" if gasto_erogado_real > 0 else None, delta_color="inverse")
-            kpi3.metric("Utilidad Bruta Real", f"${utilidad_bruta_real:,.2f}", delta=f"${utilidad_bruta_real:,.2f}" if utilidad_bruta_real > 0 else None)
-            kpi4.metric("Margen Real", f"{pct_margen_real:.1f}%")
-
-            st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
-            if proy_mo_presupuestada > 0:
-                ratio_mo = total_destajos_pagados / proy_mo_presupuestada
-                if total_destajos_pagados > proy_mo_presupuestada:
-                    exceso_pct = (ratio_mo - 1.0) * 100
-                    st.error(f"🚨 **Semáforo Rojo - Sobregiro en Mano de Obra:** El importe erogado en destajos (${total_destajos_pagados:,.2f}) sobrepasa el presupuesto de mano de obra pactado (${proy_mo_presupuestada:,.2f}) en un **{exceso_pct:.1f}%**.")
-                elif ratio_mo > 0.85:
-                    st.warning(f"⚠️ **Semáforo Amarillo - Advertencia de Desviación:** Los destajos erogados alcanzan el **{(ratio_mo*100):.1f}%** de la mano de obra presupuestada (${total_destajos_pagados:,.2f} de ${proy_mo_presupuestada:,.2f}).")
-                else:
-                    st.success("🟢 **Semáforo Verde - Control Óptimo:** La mano de obra y destajos se mantienen dentro de los parámetros presupuestados.")
+            # Estilo dinámico tricolor para Margen Real (escopado al contenedor de Resumen Global)
+            diff_meta = pct_margen_real - pct_util_proy
+            if pct_margen_real < pct_util_proy:
+                # Flecha hacia abajo obligatoria para estados Amarillo o Rojo
+                delta_margen = f"-{abs(diff_meta):.1f}% vs meta ({pct_util_proy:.0f}%)"
             else:
-                st.info("💡 **Semáforo Financiero:** Registra costos desglosados en el catálogo para activar el semáforo de control de destajos.")
+                # Flecha hacia arriba para estado Verde
+                delta_margen = f"+{abs(diff_meta):.1f}% vs meta ({pct_util_proy:.0f}%)"
+
+            if pct_margen_real < 0.0:
+                # 1) ROJO: Margen estrictamente negativo (< 0%)
+                bg_m = "rgba(239, 68, 68, 0.15)"
+                col_m = "#DC2626"
+            elif pct_margen_real < pct_util_proy:
+                # 2) AMARILLO: Idéntico al color de la leyenda de advertencia st.warning (fondo pastel y texto dorado/ámbar)
+                bg_m = "rgba(255, 255, 18, 0.25)"
+                col_m = "rgb(146, 108, 5)"
+            else:
+                # 3) VERDE: Margen igual o mayor que el margen meta del proyecto
+                bg_m = "rgba(16, 185, 129, 0.15)"
+                col_m = "#059669"
+
+            css_margen = (
+                f"##### 🏛️ Resumen Global del Proyecto <span id='resumen-global-proyecto'></span>\n"
+                f"<style>\n"
+                f"div:has(#resumen-global-proyecto) [data-testid='stColumn']:nth-child(6) [data-testid='stMetricDelta'],\n"
+                f"[data-testid='stHorizontalBlock']:has([data-testid='stColumn']:nth-child(6)) > [data-testid='stColumn']:nth-child(6) [data-testid='stMetricDelta'] {{\n"
+                f"    background-color: {bg_m} !important;\n"
+                f"    color: {col_m} !important;\n"
+                f"}}\n"
+                f"div:has(#resumen-global-proyecto) [data-testid='stColumn']:nth-child(6) [data-testid='stMetricDelta'] svg,\n"
+                f"[data-testid='stHorizontalBlock']:has([data-testid='stColumn']:nth-child(6)) > [data-testid='stColumn']:nth-child(6) [data-testid='stMetricDelta'] svg {{\n"
+                f"    color: {col_m} !important;\n"
+                f"    fill: currentColor !important;\n"
+                f"}}\n"
+                f"div:has(#resumen-global-proyecto) [data-testid='stColumn']:nth-child(6) [data-testid='stMetricDelta'] svg path:first-child,\n"
+                f"[data-testid='stHorizontalBlock']:has([data-testid='stColumn']:nth-child(6)) > [data-testid='stColumn']:nth-child(6) [data-testid='stMetricDelta'] svg path:first-child {{\n"
+                f"    fill: none !important;\n"
+                f"}}\n"
+                f"div:has(#resumen-global-proyecto) [data-testid='stColumn']:nth-child(6) [data-testid='stMetricDelta'] svg path:last-child,\n"
+                f"[data-testid='stHorizontalBlock']:has([data-testid='stColumn']:nth-child(6)) > [data-testid='stColumn']:nth-child(6) [data-testid='stMetricDelta'] svg path:last-child {{\n"
+                f"    fill: currentColor !important;\n"
+                f"}}\n"
+                f"div:has(#resumen-global-proyecto) [data-testid='stColumn']:nth-child(6) [data-testid='stMetricDelta'] p,\n"
+                f"[data-testid='stHorizontalBlock']:has([data-testid='stColumn']:nth-child(6)) > [data-testid='stColumn']:nth-child(6) [data-testid='stMetricDelta'] p {{\n"
+                f"    color: {col_m} !important;\n"
+                f"}}\n"
+                f"</style>"
+            )
+            st.markdown(css_margen, unsafe_allow_html=True)
+
+            kpi1, kpi_iva, kpi_rep, kpi2, kpi3, kpi4 = st.columns(6)
+            
+            # 1. Presupuesto Pactado
+            kpi1.metric("Presupuesto Pactado", f"${monto_contratado_total:,.2f}")
+
+            # 2. Total con I.V.A. (Ubicado entre Presupuesto Pactado y Gasto Reportable)
+            if pct_iva_proy > 0:
+                delta_iva_kpi = f"+${monto_iva_global:,.2f} ({pct_iva_proy:.1f}% IVA)"
+            else:
+                delta_iva_kpi = "Sin IVA aplicable (0%)"
+            kpi_iva.metric(
+                "Total con I.V.A.",
+                f"${total_con_iva_global:,.2f}",
+                delta=delta_iva_kpi,
+                delta_color="off",
+                help="Monto total cobrable acumulado amparado en estimaciones incluyendo el Impuesto al Valor Agregado configurado en el proyecto."
+            )
+            
+            # 3. Gasto Reportable (con delta vs Presupuesto Pactado en rojo si sobrepasa)
+            diff_rep = monto_estimado_global - monto_contratado_total
+            if monto_contratado_total > 0 and diff_rep > 0:
+                delta_rep = f"+${diff_rep:,.2f} sobre pactado"
+                delta_col_rep = "inverse"
+            else:
+                delta_rep = f"{(monto_estimado_global/monto_contratado_total*100):.1f}% estimado" if monto_contratado_total > 0 else None
+                delta_col_rep = "off"
+            kpi_rep.metric(
+                "Gasto Reportable", 
+                f"${monto_estimado_global:,.2f}", 
+                delta=delta_rep, 
+                delta_color=delta_col_rep, 
+                help="Total acumulado cobrable al cliente amparado en las estimaciones abiertas a precios unitarios de catálogo (Subtotal sin IVA)."
+            )
+            
+            # 4. Gasto Erogado Real (con delta en rojo si excede el pactado)
+            diff_erogado = gasto_erogado_real - monto_contratado_total
+            if monto_contratado_total > 0 and diff_erogado > 0:
+                delta_erog = f"+${diff_erogado:,.2f} sobre pactado"
+                delta_col_erog = "inverse"
+            else:
+                delta_erog = f"{(gasto_erogado_real/monto_contratado_total*100):.1f}% ejercido" if monto_contratado_total > 0 else None
+                delta_col_erog = "off"
+            kpi2.metric("Gasto Erogado Real", f"${gasto_erogado_real:,.2f}", delta=delta_erog, delta_color=delta_col_erog)
+
+            # 5. Utilidad Bruta Real
+            excedente_contrato = max(0.0, monto_estimado_global - monto_contratado_total)
+            if excedente_contrato > 0:
+                delta_util = f"Sujeta a adenda (${excedente_contrato:,.2f} excedente)"
+                delta_col_util = "off"
+            else:
+                delta_util = f"{pct_margen_real:.1f}% margen"
+                delta_col_util = "normal"
+            kpi3.metric(
+                "Utilidad Bruta Real", 
+                f"${utilidad_bruta_real:,.2f}", 
+                delta=delta_util, 
+                delta_color=delta_col_util, 
+                help="Utilidad operativa calculada sobre el total cuantificado en campo vs el costo directo erogado."
+            )
+
+            # 6. Margen Real (llamado directamente en kpi4 para alineación milimétrica exacta con los otros 5 KPIs)
+            kpi4.metric("Margen Real", f"{pct_margen_real:.1f}%", delta=delta_margen, delta_color="normal")
+
+            # Banner al fondo del contenedor: Conceptos Sobregirados
+            conceptos_sobre = [c for c in conceptos_dash if acumulados_cronologicos.get(c["id"], 0.0) > float(c.get("cantidad_contratada") or 0.0)]
+            if conceptos_sobre:
+                n_sobre = len(conceptos_sobre)
+                plural = "s" if n_sobre > 1 else ""
+                st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
+                st.warning(f"⚠️ **{n_sobre} Concepto{plural} Sobregirado{plural}**, revisa la sección de *Desglose por Estimación y Concepto* para obtener más detalles.")
 
         st.markdown("<div style='height: 4px;'></div>", unsafe_allow_html=True)
         with st.container(border=True):
@@ -355,7 +543,7 @@ def render_dashboard_tab(supabase, user_id: str, lista_proyectos: list, get_conc
                 )
 
             df_dist_plot = _calcular_df_distribucion(sel_filtro_dona)
-            col_chart, col_legend_table = st.columns([1.3, 1])
+            col_chart, col_legend_table = st.columns([1.05, 1.35])
             with col_chart:
                 chart_obj = _crear_grafica_dona(df_dist_plot)
                 if chart_obj:
@@ -366,15 +554,37 @@ def render_dashboard_tab(supabase, user_id: str, lista_proyectos: list, get_conc
             with col_legend_table:
                 st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
                 st.dataframe(
-                    df_dist_plot[["Rubro", "Importe", "Porcentaje"]],
+                    df_dist_plot[["Rubro", "Importe", "Porcentaje", "Estatus"]],
                     column_config={
-                        "Rubro": st.column_config.TextColumn("Rubro", width=160),
-                        "Importe": st.column_config.NumberColumn("Importe", format="$%,.2f", width=120),
-                        "Porcentaje": st.column_config.NumberColumn("% Total", format="%.1f%%", width=80)
+                        "Rubro": st.column_config.TextColumn("Rubro", width=145),
+                        "Importe": st.column_config.NumberColumn("Importe", format="$%,.2f", width=105),
+                        "Porcentaje": st.column_config.NumberColumn("% Total", format="%.1f%%", width=70),
+                        "Estatus": st.column_config.TextColumn("Estatus", width=240)
                     },
                     hide_index=True,
                     use_container_width=True
                 )
+
+                # Barra de Liquidación Contable y Fiscal (Opción B)
+                sub_sel = float(df_dist_plot["Importe"].sum())
+                iva_sel = round(sub_sel * (pct_iva_proy / 100.0), 2) if pct_iva_proy > 0 else 0.0
+                tot_iva_sel = round(sub_sel + iva_sel, 2)
+                lbl_iva_sel = f"+${iva_sel:,.2f} ({pct_iva_proy:.1f}%)" if pct_iva_proy > 0 else "$0.00 (Exento)"
+
+                html_barra_fiscal = (
+                    f"<div style='"
+                    f"display: flex; justify-content: space-between; align-items: center; "
+                    f"background: rgba(14, 165, 233, 0.06); "
+                    f"border: 1px solid rgba(14, 165, 233, 0.22); "
+                    f"border-radius: 8px; padding: 7px 12px; margin-top: 8px; margin-bottom: 8px; "
+                    f"font-size: 0.86rem;'>"
+                    f"<div>🏷️ <span style='color: #64748B;'>Subtotal:</span> <b>${sub_sel:,.2f}</b></div>"
+                    f"<div>🏛️ <span style='color: #64748B;'>IVA:</span> <b>{lbl_iva_sel}</b></div>"
+                    f"<div>💳 <span style='color: #0284C7;'>Total c/IVA:</span> <b style='color: #0369A1; font-size: 0.95rem;'>${tot_iva_sel:,.2f}</b></div>"
+                    f"</div>\n"
+                    f"<div style='height: 4px;'></div>"
+                )
+                st.markdown(html_barra_fiscal, unsafe_allow_html=True)
 
     else:
         # ---------------- MODO MIXTA / INTEGRAL (COLUMNAS PARALELAS) ----------------
@@ -464,7 +674,7 @@ def render_dashboard_tab(supabase, user_id: str, lista_proyectos: list, get_conc
                 )
 
             df_dist_plot_m = _calcular_df_distribucion(sel_filtro_dona_m)
-            col_chart, col_legend_table = st.columns([1.3, 1])
+            col_chart, col_legend_table = st.columns([1.05, 1.35])
             with col_chart:
                 chart_obj = _crear_grafica_dona(df_dist_plot_m)
                 if chart_obj:
@@ -475,15 +685,37 @@ def render_dashboard_tab(supabase, user_id: str, lista_proyectos: list, get_conc
             with col_legend_table:
                 st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
                 st.dataframe(
-                    df_dist_plot_m[["Rubro", "Importe", "Porcentaje"]],
+                    df_dist_plot_m[["Rubro", "Importe", "Porcentaje", "Estatus"]],
                     column_config={
-                        "Rubro": st.column_config.TextColumn("Rubro", width=160),
-                        "Importe": st.column_config.NumberColumn("Importe", format="$%,.2f", width=120),
-                        "Porcentaje": st.column_config.NumberColumn("% Total", format="%.1f%%", width=80)
+                        "Rubro": st.column_config.TextColumn("Rubro", width=145),
+                        "Importe": st.column_config.NumberColumn("Importe", format="$%,.2f", width=105),
+                        "Porcentaje": st.column_config.NumberColumn("% Total", format="%.1f%%", width=70),
+                        "Estatus": st.column_config.TextColumn("Estatus", width=240)
                     },
                     hide_index=True,
                     use_container_width=True
                 )
+
+                # Barra de Liquidación Contable y Fiscal (Opción B)
+                sub_sel_m = float(df_dist_plot_m["Importe"].sum())
+                iva_sel_m = round(sub_sel_m * (pct_iva_proy / 100.0), 2) if pct_iva_proy > 0 else 0.0
+                tot_iva_sel_m = round(sub_sel_m + iva_sel_m, 2)
+                lbl_iva_sel_m = f"+${iva_sel_m:,.2f} ({pct_iva_proy:.1f}%)" if pct_iva_proy > 0 else "$0.00 (Exento)"
+
+                html_barra_fiscal_m = (
+                    f"<div style='"
+                    f"display: flex; justify-content: space-between; align-items: center; "
+                    f"background: rgba(14, 165, 233, 0.06); "
+                    f"border: 1px solid rgba(14, 165, 233, 0.22); "
+                    f"border-radius: 8px; padding: 7px 12px; margin-top: 8px; margin-bottom: 8px; "
+                    f"font-size: 0.86rem;'>"
+                    f"<div>🏷️ <span style='color: #64748B;'>Subtotal:</span> <b>${sub_sel_m:,.2f}</b></div>"
+                    f"<div>🏛️ <span style='color: #64748B;'>IVA:</span> <b>{lbl_iva_sel_m}</b></div>"
+                    f"<div>💳 <span style='color: #0284C7;'>Total c/IVA:</span> <b style='color: #0369A1; font-size: 0.95rem;'>${tot_iva_sel_m:,.2f}</b></div>"
+                    f"</div>\n"
+                    f"<div style='height: 4px;'></div>"
+                )
+                st.markdown(html_barra_fiscal_m, unsafe_allow_html=True)
 
     st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
 

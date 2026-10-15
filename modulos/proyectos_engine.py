@@ -209,7 +209,7 @@ def render_proyectos_tab(supabase: Client, user_id: str, lista_proyectos: list, 
                     step=1.0,
                     format="%.2f",
                     key=f"proy_ind_{p_counter}",
-                    help="Factor general de gastos indirectos de obra."
+                    help="Porcentaje valor objetivo de gastos indirectos de obra para control financiero y análisis de rentabilidad."
                 )
             with c_f2:
                 pct_uti = st.number_input(
@@ -219,7 +219,7 @@ def render_proyectos_tab(supabase: Client, user_id: str, lista_proyectos: list, 
                     step=1.0,
                     format="%.2f",
                     key=f"proy_uti_{p_counter}",
-                    help="Margen de utilidad comercial base para catálogo."
+                    help="Porcentaje valor objetivo de margen de utilidad comercial para control financiero y análisis de rentabilidad."
                 )
             with c_f3:
                 pct_her = st.number_input(
@@ -229,7 +229,7 @@ def render_proyectos_tab(supabase: Client, user_id: str, lista_proyectos: list, 
                     step=0.5,
                     format="%.2f",
                     key=f"proy_her_{p_counter}",
-                    help="Porcentaje de herramienta menor y equipo de seguridad."
+                    help="Porcentaje valor objetivo de herramienta menor y equipo de seguridad para control financiero."
                 )
             with c_f4:
                 pct_iva = st.number_input(
@@ -239,7 +239,7 @@ def render_proyectos_tab(supabase: Client, user_id: str, lista_proyectos: list, 
                     step=1.0,
                     format="%.2f",
                     key=f"proy_iva_{p_counter}",
-                    help="Tasa de IVA aplicable."
+                    help="Tasa de IVA objetivo aplicable al proyecto para facturación y cobro oficial de estimaciones."
                 )
 
             # 1.3 Georreferenciación Abierta con OpenStreetMap (Nominatim)
@@ -482,6 +482,8 @@ def render_proyectos_tab(supabase: Client, user_id: str, lista_proyectos: list, 
         df_p["tipo_obra"] = df_p.get("tipo_obra", "obra_nueva").fillna("obra_nueva").map(lambda x: TIPOS_OBRA_INV.get(x, x))
         df_p["porcentaje_indirectos"] = pd.to_numeric(df_p.get("porcentaje_indirectos", 15.0), errors="coerce").fillna(15.0).round(2)
         df_p["porcentaje_utilidad"] = pd.to_numeric(df_p.get("porcentaje_utilidad", 15.0), errors="coerce").fillna(15.0).round(2)
+        df_p["porcentaje_herramienta"] = pd.to_numeric(df_p.get("porcentaje_herramienta", 5.0), errors="coerce").fillna(5.0).round(2)
+        df_p["porcentaje_iva"] = pd.to_numeric(df_p.get("porcentaje_iva", 16.0), errors="coerce").fillna(16.0).round(2)
 
         for col_txt in ["nombre_obra", "municipio", "estado", "contrato_no", "contratista", "residente_obra"]:
             if col_txt in df_p.columns:
@@ -491,7 +493,7 @@ def render_proyectos_tab(supabase: Client, user_id: str, lista_proyectos: list, 
 
         cols_mostrar = [
             "#", "nombre_obra", "modalidad", "tipo_obra",
-            "porcentaje_indirectos", "porcentaje_utilidad",
+            "porcentaje_indirectos", "porcentaje_utilidad", "porcentaje_herramienta", "porcentaje_iva",
             "municipio", "estado", "contrato_no", "contratista", "residente_obra"
         ]
 
@@ -504,8 +506,10 @@ def render_proyectos_tab(supabase: Client, user_id: str, lista_proyectos: list, 
                 "nombre_obra": st.column_config.TextColumn("Nombre de la Obra", required=True),
                 "modalidad": st.column_config.SelectboxColumn("Modalidad", options=list(MODALIDADES_MAP.keys()), required=True),
                 "tipo_obra": st.column_config.SelectboxColumn("Tipo de Obra", options=list(TIPOS_OBRA_MAP.keys()), required=True),
-                "porcentaje_indirectos": st.column_config.NumberColumn("% Indirectos", format="%.2f%%", min_value=0.0, step=0.5),
-                "porcentaje_utilidad": st.column_config.NumberColumn("% Utilidad", format="%.2f%%", min_value=0.0, step=0.5),
+                "porcentaje_indirectos": st.column_config.NumberColumn("% Indirectos", format="%.2f%%", min_value=0.0, step=0.5, help="Porcentaje valor objetivo de gastos indirectos"),
+                "porcentaje_utilidad": st.column_config.NumberColumn("% Utilidad", format="%.2f%%", min_value=0.0, step=0.5, help="Porcentaje valor objetivo de margen de utilidad"),
+                "porcentaje_herramienta": st.column_config.NumberColumn("% Herramienta", format="%.2f%%", min_value=0.0, step=0.5, help="Porcentaje valor objetivo de herramienta menor"),
+                "porcentaje_iva": st.column_config.NumberColumn("% IVA", format="%.2f%%", min_value=0.0, step=0.5, help="Tasa de IVA aplicable"),
                 "municipio": st.column_config.TextColumn("Municipio"),
                 "estado": st.column_config.TextColumn("Estado"),
                 "contrato_no": st.column_config.TextColumn("Contrato N°"),
@@ -557,6 +561,18 @@ def render_proyectos_tab(supabase: Client, user_id: str, lista_proyectos: list, 
                 if "porcentaje_utilidad" in col_vals:
                     try:
                         up_p["porcentaje_utilidad"] = round(float(col_vals["porcentaje_utilidad"]), 2)
+                    except:
+                        pass
+
+                if "porcentaje_herramienta" in col_vals:
+                    try:
+                        up_p["porcentaje_herramienta"] = round(float(col_vals["porcentaje_herramienta"]), 2)
+                    except:
+                        pass
+
+                if "porcentaje_iva" in col_vals:
+                    try:
+                        up_p["porcentaje_iva"] = round(float(col_vals["porcentaje_iva"]), 2)
                     except:
                         pass
 

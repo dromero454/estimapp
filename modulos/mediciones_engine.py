@@ -1,6 +1,7 @@
-import streamlit as st
-import pandas as pd
+import datetime
 import uuid
+import pandas as pd
+import streamlit as st
 from modulos.db_engine import normalizar_unidad, extraer_nombre_archivo, extraer_nombres_archivos, optimizar_imagen
 
 def get_personal_obra_disponible(supabase, user_id: str):
@@ -32,6 +33,7 @@ def render_mediciones_tab(supabase, user_id: str, lista_proyectos: list, get_est
     
     lista_est_cap = get_estimaciones(id_proy_cap)
     estimaciones_dict = {f"Estimación #{e['num_periodo']} ({e['estado']})": e["id"] for e in lista_est_cap} if lista_est_cap else {}
+    estimaciones_obj_dict = {f"Estimación #{e['num_periodo']} ({e['estado']})": e for e in lista_est_cap} if lista_est_cap else {}
     
     lista_conc_cap = get_conceptos(id_proy_cap)
     conceptos_dict = {}
@@ -89,7 +91,25 @@ def render_mediciones_tab(supabase, user_id: str, lista_proyectos: list, get_est
     c_ver = st.session_state.get("cap_counter", 0)
     d_ver = f"{st.session_state.get('cap_counter', 0)}_{st.session_state.get('dim_counter', 0)}"
 
-    col_dest1, col_dest2 = st.columns([2, 1])
+    est_activa_obj = estimaciones_obj_dict.get(est_sel, {})
+    p_ini = est_activa_obj.get("periodo_inicio")
+    p_fin = est_activa_obj.get("periodo_fin")
+
+    def _parse_d(v):
+        if not v:
+            return None
+        if isinstance(v, datetime.date):
+            return v
+        try:
+            return datetime.date.fromisoformat(str(v)[:10])
+        except Exception:
+            return None
+
+    d_min = _parse_d(p_ini)
+    d_max = _parse_d(p_fin)
+    val_def = d_min if d_min else datetime.date.today()
+
+    col_dest1, col_dest2 = st.columns(2)
     dest_sel = col_dest1.selectbox(
         "👷 Destajista / Trabajador responsable",
         opciones_personal,
@@ -97,39 +117,16 @@ def render_mediciones_tab(supabase, user_id: str, lista_proyectos: list, get_est
         key=f"dest_sel_{c_ver}"
     )
 
-    sel_trabajador_obj = personal_obj_map.get(dest_sel, {})
-    es_destajo = (sel_trabajador_obj.get("modalidad_pago") == "Por Destajo")
-    es_sin_asignar = (sel_trabajador_obj.get("id") is None)
+    fecha_realizacion = col_dest2.date_input(
+        "📅 Fecha de realización",
+        value=val_def,
+        min_value=d_min,
+        max_value=d_max,
+        key=f"fecha_real_{c_ver}",
+        help="Fecha calendario en la que se ejecutó esta actividad en sitio. Acotada al periodo de corte de la estimación activa."
+    )
 
-    if es_destajo:
-        horas_jornales = col_dest2.number_input(
-            "Jornadas invertidas",
-            min_value=0.0,
-            value=0.0,
-            step=0.5,
-            disabled=True,
-            key=f"jornales_{c_ver}",
-            help="💡 Este trabajador cobra 'Por Destajo'. El importe a pagar se calculará automáticamente multiplicando el volumen cuantificado por el costo de mano de obra del concepto en el catálogo."
-        )
-    elif es_sin_asignar:
-        horas_jornales = col_dest2.number_input(
-            "Jornadas invertidas",
-            min_value=0.0,
-            value=0.0,
-            step=0.5,
-            disabled=True,
-            key=f"jornales_{c_ver}",
-            help="Asigna un trabajador específico para habilitar el cómputo de jornadas."
-        )
-    else:
-        horas_jornales = col_dest2.number_input(
-            "Jornadas invertidas",
-            min_value=0.0,
-            value=1.0,
-            step=0.5,
-            key=f"jornales_{c_ver}",
-            help="Número de días/jornadas laboradas en esta actividad."
-        )
+    horas_jornales = 1.0
 
     # Localización y Ejes
     col_loc1, col_loc2, col_loc3 = st.columns(3)
@@ -256,6 +253,7 @@ def render_mediciones_tab(supabase, user_id: str, lista_proyectos: list, get_est
                 supabase.table("mediciones_campo").insert({
                     "id_estimacion": id_est,
                     "id_concepto": id_conc,
+                    "fecha": fecha_realizacion.isoformat() if hasattr(fecha_realizacion, "isoformat") else str(fecha_realizacion)[:10],
                     "localizacion": localizacion.strip(),
                     "eje": eje.strip(),
                     "tramo": tramo.strip(),
@@ -293,7 +291,15 @@ def render_mediciones_tab(supabase, user_id: str, lista_proyectos: list, get_est
         meds_borrar_dict = {}
         total_periodo_acum = 0.0
 
-        for idx, m in enumerate(mediciones_periodo, start=1):
+        def _sort_key_med(m_item):
+            f_str = str(m_item.get("fecha") or (m_item.get("created_at") or ""))[:10]
+            p_nom = (m_item.get("personal_obra") or {}).get("nombre") or "ZZZ"
+            c_clv = (m_item.get("catalogo_conceptos") or {}).get("clave") or "ZZZ"
+            return (f_str, p_nom, c_clv)
+
+        mediciones_periodo_sorted = sorted(mediciones_periodo, key=_sort_key_med)
+
+        for idx, m in enumerate(mediciones_periodo_sorted, start=1):
             c_info = m.get("catalogo_conceptos") or {}
             p_info = m.get("personal_obra") or {}
             
@@ -319,13 +325,19 @@ def render_mediciones_tab(supabase, user_id: str, lista_proyectos: list, get_est
                         personal_dict_map[destajista_lbl] = pid
 
             jornales_m = float(m.get("horas_o_jornales") or 0.0)
+            f_raw = m.get("fecha") or (m.get("created_at") or "")[:10]
+            f_date = _parse_d(f_raw) or (d_min or datetime.date.today())
+            if d_min and f_date < d_min:
+                f_date = d_min
+            elif d_max and f_date > d_max:
+                f_date = d_max
 
             rows.append({
                 "#": idx,
                 "id": m["id"],
                 "Clave": clave_c,
                 "Destajista / Trabajador": destajista_lbl,
-                "Jornadas": jornales_m,
+                "Fecha": f_date,
                 "Localización": m.get("localizacion") or "",
                 "Eje": m.get("eje") or "",
                 "Tramo": m.get("tramo") or "",
@@ -351,7 +363,15 @@ def render_mediciones_tab(supabase, user_id: str, lista_proyectos: list, get_est
                 "#": st.column_config.NumberColumn("#", disabled=True, width=50),
                 "Clave": st.column_config.TextColumn("Clave", disabled=True, width=110),
                 "Destajista / Trabajador": st.column_config.SelectboxColumn("Destajista / Trabajador", options=opciones_personal, width=180),
-                "Jornadas": st.column_config.NumberColumn("Jornadas", format="%.2f", min_value=0.0, step=0.5, width=90),
+                "Fecha": st.column_config.DateColumn(
+                    "Fecha",
+                    format="YYYY-MM-DD",
+                    min_value=d_min,
+                    max_value=d_max,
+                    default=d_min,
+                    width=110,
+                    help="Fecha de realización de la actividad. Restringida al periodo de la estimación activa."
+                ),
                 "Localización": st.column_config.TextColumn("Localización", width=160),
                 "Eje": st.column_config.TextColumn("Eje", width=90),
                 "Tramo": st.column_config.TextColumn("Tramo", width=90),
@@ -390,12 +410,16 @@ def render_mediciones_tab(supabase, user_id: str, lista_proyectos: list, get_est
                     val_dest_lbl = col_vals["Destajista / Trabajador"]
                     up_payload["id_personal"] = personal_dict_map.get(val_dest_lbl, None)
 
-                if "Jornadas" in col_vals:
-                    val_jor = col_vals["Jornadas"]
-                    try:
-                        up_payload["horas_o_jornales"] = round(max(0.0, float(val_jor)), 2) if val_jor is not None else 0.0
-                    except (ValueError, TypeError):
-                        up_payload["horas_o_jornales"] = 0.0
+                if "Fecha" in col_vals:
+                    val_f = col_vals["Fecha"]
+                    if val_f:
+                        f_dt = _parse_d(val_f)
+                        if f_dt:
+                            if d_min and f_dt < d_min: f_dt = d_min
+                            elif d_max and f_dt > d_max: f_dt = d_max
+                            up_payload["fecha"] = f_dt.isoformat()
+                        else:
+                            up_payload["fecha"] = str(val_f)[:10]
 
                 for k in ["Localización", "Eje", "Tramo"]:
                     if k in col_vals:
