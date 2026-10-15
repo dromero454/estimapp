@@ -209,7 +209,7 @@ def render_proyectos_tab(supabase: Client, user_id: str, lista_proyectos: list, 
                     step=1.0,
                     format="%.2f",
                     key=f"proy_ind_{p_counter}",
-                    help="Porcentaje valor objetivo de gastos indirectos de obra para control financiero y análisis de rentabilidad."
+                    help="Valor objetivo de gastos indirectos de obra para control financiero y análisis de rentabilidad."
                 )
             with c_f2:
                 pct_uti = st.number_input(
@@ -219,7 +219,7 @@ def render_proyectos_tab(supabase: Client, user_id: str, lista_proyectos: list, 
                     step=1.0,
                     format="%.2f",
                     key=f"proy_uti_{p_counter}",
-                    help="Porcentaje valor objetivo de margen de utilidad comercial para control financiero y análisis de rentabilidad."
+                    help="Valor objetivo de margen de utilidad comercial para control financiero y análisis de rentabilidad."
                 )
             with c_f3:
                 pct_her = st.number_input(
@@ -229,7 +229,7 @@ def render_proyectos_tab(supabase: Client, user_id: str, lista_proyectos: list, 
                     step=0.5,
                     format="%.2f",
                     key=f"proy_her_{p_counter}",
-                    help="Porcentaje valor objetivo de herramienta menor y equipo de seguridad para control financiero."
+                    help="Valor objetivo de herramienta menor y equipo de seguridad para control financiero."
                 )
             with c_f4:
                 pct_iva = st.number_input(
@@ -308,18 +308,18 @@ def render_proyectos_tab(supabase: Client, user_id: str, lista_proyectos: list, 
                 )
             with c_g2:
                 latitud = st.number_input(
-                    "Latitud WGS84 (Telemetría Clima)",
+                    "Latitud",
                     format="%.6f",
                     disabled=True,
                     key=f"proy_lat_{p_counter}",
-                    help="Coordenada geográfica resuelta por OpenStreetMap para Open-Meteo y modelos de Machine Learning (solo lectura)."
+                    help="Coordenada geográfica devuelta por OpenStreetMap para Open-Meteo (solo lectura)."
                 )
                 longitud = st.number_input(
-                    "Longitud WGS84 (Telemetría Clima)",
+                    "Longitud",
                     format="%.6f",
                     disabled=True,
                     key=f"proy_lon_{p_counter}",
-                    help="Coordenada geográfica resuelta por OpenStreetMap para Open-Meteo y modelos de Machine Learning (solo lectura)."
+                    help="Coordenada geográfica devuelta por OpenStreetMap para Open-Meteo (solo lectura)."
                 )
 
             c_g3, c_g4 = st.columns(2)
@@ -506,9 +506,9 @@ def render_proyectos_tab(supabase: Client, user_id: str, lista_proyectos: list, 
                 "nombre_obra": st.column_config.TextColumn("Nombre de la Obra", required=True),
                 "modalidad": st.column_config.SelectboxColumn("Modalidad", options=list(MODALIDADES_MAP.keys()), required=True),
                 "tipo_obra": st.column_config.SelectboxColumn("Tipo de Obra", options=list(TIPOS_OBRA_MAP.keys()), required=True),
-                "porcentaje_indirectos": st.column_config.NumberColumn("% Indirectos", format="%.2f%%", min_value=0.0, step=0.5, help="Porcentaje valor objetivo de gastos indirectos"),
-                "porcentaje_utilidad": st.column_config.NumberColumn("% Utilidad", format="%.2f%%", min_value=0.0, step=0.5, help="Porcentaje valor objetivo de margen de utilidad"),
-                "porcentaje_herramienta": st.column_config.NumberColumn("% Herramienta", format="%.2f%%", min_value=0.0, step=0.5, help="Porcentaje valor objetivo de herramienta menor"),
+                "porcentaje_indirectos": st.column_config.NumberColumn("% Indirectos", format="%.2f%%", min_value=0.0, step=0.5, help="Valor objetivo de gastos indirectos"),
+                "porcentaje_utilidad": st.column_config.NumberColumn("% Utilidad", format="%.2f%%", min_value=0.0, step=0.5, help="Valor objetivo de margen de utilidad"),
+                "porcentaje_herramienta": st.column_config.NumberColumn("% Herramienta", format="%.2f%%", min_value=0.0, step=0.5, help="Valor objetivo de herramienta menor"),
                 "porcentaje_iva": st.column_config.NumberColumn("% IVA", format="%.2f%%", min_value=0.0, step=0.5, help="Tasa de IVA aplicable"),
                 "municipio": st.column_config.TextColumn("Municipio"),
                 "estado": st.column_config.TextColumn("Estado"),

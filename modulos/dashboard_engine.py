@@ -238,7 +238,7 @@ def render_dashboard_tab(supabase, user_id: str, lista_proyectos: list, get_conc
         df_plot = df_dist_data[df_dist_data["Importe"] > 0]
         if df_plot.empty:
             return None
-        return alt.Chart(df_plot).mark_arc(innerRadius=65, outerRadius=110, stroke="#ffffff", strokeWidth=2).encode(
+        return alt.Chart(df_plot).mark_arc(x=175, y=120, innerRadius=65, outerRadius=105, stroke="#ffffff", strokeWidth=2).encode(
             theta=alt.Theta(field="Importe", type="quantitative"),
             color=alt.Color(
                 field="Rubro",
@@ -249,7 +249,9 @@ def render_dashboard_tab(supabase, user_id: str, lista_proyectos: list, get_conc
                 ),
                 legend=alt.Legend(
                     title="Rubro Financiero",
-                    orient="right",
+                    orient="none",
+                    legendX=305,
+                    legendY=8,
                     labelFontSize=11,
                     titleFontSize=12,
                     symbolType="circle"
@@ -261,7 +263,50 @@ def render_dashboard_tab(supabase, user_id: str, lista_proyectos: list, get_conc
                 alt.Tooltip("Participacion:N", title="Participación")
             ]
         ).properties(
-            height=250
+            height=240
+        ).configure_view(
+            strokeWidth=0
+        )
+
+    # Helper para gráfica de dona interactiva de Mano de Obra con Altair
+    def _crear_grafica_dona_mo(df_mo_data):
+        df_plot = df_mo_data[df_mo_data["Importe"] > 0]
+        if df_plot.empty:
+            return None
+        palette = ["#0D9488", "#2563EB", "#F59E0B", "#8B5CF6", "#EC4899", "#06B6D4", "#10B981", "#6366F1", "#D97706", "#4F46E5"]
+        domain_trabs = [t for t in df_plot["Trabajador"].tolist() if t != "Mano de Obra sin Asignar"]
+        range_trabs = palette[:len(domain_trabs)]
+        if "Mano de Obra sin Asignar" in df_plot["Trabajador"].values:
+            domain_trabs.append("Mano de Obra sin Asignar")
+            range_trabs.append("#94A3B8")
+
+        return alt.Chart(df_plot).mark_arc(x=175, y=120, innerRadius=65, outerRadius=105, stroke="#ffffff", strokeWidth=2).encode(
+            theta=alt.Theta(field="Importe", type="quantitative"),
+            color=alt.Color(
+                field="Trabajador",
+                type="nominal",
+                scale=alt.Scale(
+                    domain=domain_trabs,
+                    range=range_trabs
+                ),
+                legend=alt.Legend(
+                    title="Personal / Asignación",
+                    orient="none",
+                    legendX=305,
+                    legendY=8,
+                    labelFontSize=11,
+                    titleFontSize=12,
+                    symbolType="circle"
+                )
+            ),
+            tooltip=[
+                alt.Tooltip("Trabajador:N", title="Trabajador / Cuadrilla"),
+                alt.Tooltip("Modalidad:N", title="Modalidad"),
+                alt.Tooltip("Importe:Q", title="Importe ($)", format="$,.2f"),
+                alt.Tooltip("Participacion:N", title="% Participación")
+            ]
+        ).properties(
+            height=240
         ).configure_view(
             strokeWidth=0
         )
@@ -386,6 +431,285 @@ def render_dashboard_tab(supabase, user_id: str, lista_proyectos: list, get_conc
 
         df_res["Estatus"] = [est_mat, est_mo, est_herr, est_ind, est_util]
         return df_res
+
+    # Helper para calcular la auditoría y distribución de mano de obra por trabajador/cuadrilla
+    def _calcular_df_mano_obra(sel_filtro):
+        if sel_filtro == "Total Acumulado":
+            ests_a_procesar = estimaciones_dash
+        else:
+            try:
+                num_p = int(str(sel_filtro).replace("Estimación #", "").strip())
+                ests_a_procesar = [e for e in estimaciones_dash if e["num_periodo"] == num_p]
+            except Exception:
+                ests_a_procesar = estimaciones_dash
+
+        all_meds = []
+        for e in ests_a_procesar:
+            meds_e = get_mediciones(e["id"])
+            for m in meds_e:
+                m_copy = dict(m)
+                m_copy["_id_estimacion"] = e["id"]
+                all_meds.append(m_copy)
+
+        tot_destajos = 0.0
+        tot_jornadas = 0.0
+        tot_sin_asignar = 0.0
+        workers = {}
+        dias_jornada = set()
+
+        for m in all_meds:
+            p_info = m.get("personal_obra")
+            c_info = m.get("catalogo_conceptos") or dict_conceptos_info.get(m.get("id_concepto"), {})
+            vol = float(m.get("cantidad_total") or 0.0)
+            pu_mo = float(c_info.get("costo_mano_obra") or 0.0)
+            m_val = round(vol * pu_mo, 2)
+
+            if not p_info and not m.get("id_personal"):
+                tot_sin_asignar += m_val
+                k = "sin_asignar"
+                if k not in workers:
+                    workers[k] = {
+                        "Trabajador": "Mano de Obra sin Asignar",
+                        "Modalidad": "Sin Asignar",
+                        "Importe": 0.0,
+                        "valor_generado": 0.0,
+                        "salario_pagado": 0.0,
+                        "Estatus": "⚠️ Pendiente asignar en Tab de Captura en Campo"
+                    }
+                workers[k]["Importe"] += m_val
+                workers[k]["valor_generado"] += m_val
+            else:
+                pid = m.get("id_personal") or p_info.get("id")
+                nombre = p_info.get("nombre") or f"Trabajador #{pid}"
+                mod = p_info.get("modalidad_pago") or "Por Destajo"
+                tarifa = float(p_info.get("costo_jornal_base") or 0.0)
+                fecha = str(m.get("fecha") or (m.get("created_at") or ""))[:10]
+                id_est = m.get("_id_estimacion")
+
+                k = (pid, mod)
+                if k not in workers:
+                    workers[k] = {
+                        "Trabajador": nombre,
+                        "Modalidad": mod,
+                        "Importe": 0.0,
+                        "valor_generado": 0.0,
+                        "salario_pagado": 0.0,
+                        "tarifa": tarifa,
+                        "dias": set()
+                    }
+                workers[k]["valor_generado"] += m_val
+
+                if mod == "Por Destajo":
+                    workers[k]["Importe"] += m_val
+                    tot_destajos += m_val
+                else:
+                    k_dia = (id_est, fecha, pid)
+                    if k_dia not in dias_jornada:
+                        dias_jornada.add(k_dia)
+                        workers[k]["dias"].add(k_dia)
+                        workers[k]["salario_pagado"] += tarifa
+                        workers[k]["Importe"] += tarifa
+                        tot_jornadas += tarifa
+
+        for k, w in workers.items():
+            if w["Modalidad"] == "Por Destajo":
+                w["Estatus"] = "🟢 Liquidado por volumen"
+            elif w["Modalidad"] == "Por Jornada":
+                gen = w["valor_generado"]
+                pag = w["salario_pagado"]
+                if gen >= pag:
+                    pct = ((gen - pag) / pag * 100.0) if pag > 0 else 0.0
+                    w["Estatus"] = f"🟢 Desquitado (+{pct:.0f}%)" if pct > 0 else "🟢 Desquitado (100%)"
+                else:
+                    pct = ((pag - gen) / pag * 100.0) if pag > 0 else 0.0
+                    w["Estatus"] = f"🔴 En déficit (-{pct:.0f}%)"
+
+        gran_total = round(tot_destajos + tot_jornadas + tot_sin_asignar, 2)
+        tot_destajos = round(tot_destajos, 2)
+        tot_jornadas = round(tot_jornadas, 2)
+        tot_sin_asignar = round(tot_sin_asignar, 2)
+
+        filas_mo = []
+        for k, w in workers.items():
+            imp = round(w["Importe"], 2)
+            pct = round((imp / gran_total * 100.0), 1) if gran_total > 0 else 0.0
+            filas_mo.append({
+                "Trabajador": w["Trabajador"],
+                "Modalidad": w["Modalidad"],
+                "Importe": imp,
+                "Porcentaje": pct,
+                "Participacion": f"{pct:.1f}%",
+                "Estatus": w["Estatus"]
+            })
+
+        filas_mo.sort(key=lambda x: x["Importe"], reverse=True)
+        df_mo = pd.DataFrame(filas_mo)
+        if df_mo.empty:
+            df_mo = pd.DataFrame(columns=["Trabajador", "Modalidad", "Importe", "Porcentaje", "Participacion", "Estatus"])
+
+        kpis_mo = {
+            "total": gran_total,
+            "destajos": tot_destajos,
+            "jornadas": tot_jornadas,
+            "sin_asignar": tot_sin_asignar
+        }
+        return df_mo, kpis_mo
+
+    # Helper maestro para renderizar el contenedor unificado y dinámico de análisis y distribución
+    def _render_contenedor_distribucion(key_suffix: str):
+        with st.container(border=True):
+            col_hdr_izq, col_hdr_der = st.columns([1.0, 1.4])
+            with col_hdr_der:
+                col_s1, col_s2 = st.columns(2)
+                with col_s1:
+                    sel_enfoque = st.selectbox(
+                        "Enfoque de Análisis:",
+                        options=[
+                            "📊 General: Costos y Margen",
+                            "👷 Mano de Obra: Trabajadores y Destajos",
+                            "📦 Materiales: Por Proveedor (Próximamente)"
+                        ],
+                        key=f"dash_enfoque_{key_suffix}",
+                        label_visibility="collapsed"
+                    )
+                with col_s2:
+                    opciones_filtro_dona = ["Total Acumulado"] + [f"Estimación #{e['num_periodo']}" for e in estimaciones_dash]
+                    sel_filtro_dona = st.selectbox(
+                        "Filtrar periodo:",
+                        options=opciones_filtro_dona,
+                        key=f"dash_filtro_dona_{key_suffix}",
+                        label_visibility="collapsed"
+                    )
+            with col_hdr_izq:
+                if sel_enfoque == "👷 Mano de Obra: Trabajadores y Destajos":
+                    st.markdown("##### 👷 Análisis de Mano de Obra y Nómina:")
+                elif sel_enfoque.startswith("📦"):
+                    st.markdown("##### 📦 Análisis de Materiales e Insumos:")
+                else:
+                    st.markdown("##### 📊 Distribución de Costos y Margen del Despacho:")
+
+            if sel_enfoque == "📊 General: Costos y Margen":
+                df_dist_plot = _calcular_df_distribucion(sel_filtro_dona)
+                col_chart, col_legend_table = st.columns([1.0, 1.4])
+                with col_chart:
+                    chart_obj = _crear_grafica_dona(df_dist_plot)
+                    if chart_obj:
+                        st.altair_chart(chart_obj, use_container_width=True)
+                    else:
+                        st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+                        st.info("💡 **Este periodo no cuenta con desglose analítico (APUs) en su catálogo ni destajistas asignados en campo.**\n\nRegistra estos costos para ver la distribución real.")
+                with col_legend_table:
+                    st.dataframe(
+                        df_dist_plot[["Rubro", "Importe", "Porcentaje", "Estatus"]],
+                        column_config={
+                            "Rubro": st.column_config.TextColumn("Rubro", width=145),
+                            "Importe": st.column_config.NumberColumn("Importe", format="$%,.2f", width=105),
+                            "Porcentaje": st.column_config.NumberColumn("% Total", format="%.1f%%", width=70),
+                            "Estatus": st.column_config.TextColumn("Estatus", width=240)
+                        },
+                        hide_index=True,
+                        use_container_width=True
+                    )
+
+                    # Barra de Liquidación Contable y Fiscal (Opción B)
+                    sub_sel = float(df_dist_plot["Importe"].sum())
+                    iva_sel = round(sub_sel * (pct_iva_proy / 100.0), 2) if pct_iva_proy > 0 else 0.0
+                    tot_iva_sel = round(sub_sel + iva_sel, 2)
+                    lbl_iva_sel = f"+${iva_sel:,.2f} ({pct_iva_proy:.1f}%)" if pct_iva_proy > 0 else "$0.00 (Exento)"
+
+                    html_barra_fiscal = (
+                        f"<div style='"
+                        f"display: flex; justify-content: space-between; align-items: center; "
+                        f"background: rgba(14, 165, 233, 0.06); "
+                        f"border: 1px solid rgba(14, 165, 233, 0.22); "
+                        f"border-radius: 8px; padding: 7px 12px; margin-top: 8px; margin-bottom: 8px; "
+                        f"font-size: 0.86rem;'>"
+                        f"<div>🏷️ <span style='color: #64748B;'>Subtotal:</span> <b>${sub_sel:,.2f}</b></div>"
+                        f"<div>🏛️ <span style='color: #64748B;'>IVA:</span> <b>{lbl_iva_sel}</b></div>"
+                        f"<div>💳 <span style='color: #0284C7;'>Total c/IVA:</span> <b style='color: #0369A1; font-size: 0.95rem;'>${tot_iva_sel:,.2f}</b></div>"
+                        f"</div>\n"
+                        f"<div style='height: 4px;'></div>"
+                    )
+                    st.markdown(html_barra_fiscal, unsafe_allow_html=True)
+
+            elif sel_enfoque == "👷 Mano de Obra: Trabajadores y Destajos":
+                df_mo_plot, kpis_mo_plot = _calcular_df_mano_obra(sel_filtro_dona)
+
+                col_chart, col_legend_table = st.columns([1.0, 1.4])
+                with col_chart:
+                    chart_mo = _crear_grafica_dona_mo(df_mo_plot)
+                    if chart_mo:
+                        st.altair_chart(chart_mo, use_container_width=True)
+                    else:
+                        st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+                        st.info("💡 **Este periodo no cuenta con registros de mano de obra, destajos ni jornales.**\n\nRegistra mediciones con destajistas o personal en la Tab de Captura en Campo.")
+                with col_legend_table:
+                    st.dataframe(
+                        df_mo_plot[["Trabajador", "Modalidad", "Importe", "Porcentaje", "Estatus"]],
+                        column_config={
+                            "Trabajador": st.column_config.TextColumn("Trabajador / Cuadrilla", width=170),
+                            "Modalidad": st.column_config.TextColumn("Modalidad", width=90),
+                            "Importe": st.column_config.NumberColumn("Importe", format="$%,.2f", width=95),
+                            "Porcentaje": st.column_config.NumberColumn("% Total", format="%.1f%%", width=65),
+                            "Estatus": st.column_config.TextColumn("Estatus", width=340)
+                        },
+                        hide_index=True,
+                        use_container_width=True
+                    )
+
+                    # Barra resumen de nómina con tooltips estilo nativo Streamlit BaseWeb
+                    sub_mo = float(df_mo_plot["Importe"].sum()) if not df_mo_plot.empty else 0.0
+                    tot_dest = kpis_mo_plot["destajos"]
+                    tot_jor = kpis_mo_plot["jornadas"]
+                    tot_sin = kpis_mo_plot["sin_asignar"]
+
+                    svg_help = (
+                        "<svg viewBox='0 0 16 16' width='14' height='14' fill='none' stroke='currentColor' stroke-width='1.5' "
+                        "style='display: inline-block; vertical-align: middle;'>"
+                        "<circle cx='8' cy='8' r='7'/>"
+                        "<path d='M8 11.5v-1M8 8a1.5 1.5 0 1 0-1.5-1.5'/>"
+                        "</svg>"
+                    )
+
+                    html_barra_mo = (
+                        f"<style>\n"
+                        f".st-tip-wrap {{ position: relative; display: inline-flex; align-items: center; cursor: help; margin-left: 5px; vertical-align: middle; }}\n"
+                        f".st-tip-icon {{ color: #64748B; opacity: 0.75; transition: opacity 0.15s ease, color 0.15s ease; display: inline-flex; align-items: center; }}\n"
+                        f".st-tip-wrap:hover .st-tip-icon {{ opacity: 1; color: #0F172A; }}\n"
+                        f".st-tip-box {{ visibility: hidden; opacity: 0; position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%); background: #1E293B; color: #F8FAFC; font-size: 0.76rem; font-weight: 400; line-height: 1.35; padding: 7px 11px; border-radius: 6px; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22); white-space: normal; width: max-content; max-width: 250px; z-index: 9999; pointer-events: none; transition: opacity 0.2s ease, transform 0.2s ease; }}\n"
+                        f".st-tip-box::after {{ content: ''; position: absolute; top: 100%; left: 50%; transform: translateX(-50%); border-width: 5px; border-style: solid; border-color: #1E293B transparent transparent transparent; }}\n"
+                        f".st-tip-box-left {{ left: 0; transform: none; }}\n"
+                        f".st-tip-box-left::after {{ left: 10px; transform: none; }}\n"
+                        f".st-tip-box-right {{ right: 0; left: auto; transform: none; }}\n"
+                        f".st-tip-box-right::after {{ right: 10px; left: auto; transform: none; }}\n"
+                        f".st-tip-wrap:hover .st-tip-box {{ visibility: visible; opacity: 1; transform: translateX(-50%) translateY(-2px); }}\n"
+                        f".st-tip-wrap:hover .st-tip-box-left {{ visibility: visible; opacity: 1; transform: translateY(-2px); }}\n"
+                        f".st-tip-wrap:hover .st-tip-box-right {{ visibility: visible; opacity: 1; transform: translateY(-2px); }}\n"
+                        f"</style>\n"
+                        f"<div style='"
+                        f"display: flex; justify-content: space-between; align-items: center; "
+                        f"background: rgba(13, 148, 136, 0.06); "
+                        f"border: 1px solid rgba(13, 148, 136, 0.22); "
+                        f"border-radius: 8px; padding: 7px 12px; margin-top: 8px; margin-bottom: 8px; "
+                        f"font-size: 0.86rem;'>"
+                        f"<div>🔨 <span style='color: #64748B;'>Destajos:</span> <b>${tot_dest:,.2f}</b>"
+                        f"<span class='st-tip-wrap'><span class='st-tip-icon'>{svg_help}</span><span class='st-tip-box st-tip-box-left'>Mano de obra devengada por destajistas según volumen ejecutado y costo unitario de catálogo.</span></span></div>"
+                        f"<div>⏱️ <span style='color: #64748B;'>Jornadas:</span> <b>${tot_jor:,.2f}</b>"
+                        f"<span class='st-tip-wrap'><span class='st-tip-icon'>{svg_help}</span><span class='st-tip-box'>Salarios devengados en campo pagados por jornal diario.</span></span></div>"
+                        f"<div>⚠️ <span style='color: #64748B;'>Sin Asignar:</span> <b>${tot_sin:,.2f}</b>"
+                        f"<span class='st-tip-wrap'><span class='st-tip-icon'>{svg_help}</span><span class='st-tip-box'>💡 Costo de mano de obra contemplado en catálogo para mediciones cuantificadas que aún no tienen un trabajador o cuadrilla responsable asignado en la Tab de Captura en Campo.</span></span></div>"
+                        f"<div>💳 <span style='color: #0F766E;'>Nómina Total:</span> <b style='color: #0D9488; font-size: 0.95rem;'>${sub_mo:,.2f}</b>"
+                        f"<span class='st-tip-wrap'><span class='st-tip-icon'>{svg_help}</span><span class='st-tip-box st-tip-box-right'>Suma total de destajos pagados, jornadas devengadas y mano de obra contemplada sin asignar en el periodo seleccionado.</span></span></div>"
+                        f"</div>\n"
+                        f"<div style='height: 4px;'></div>"
+                    )
+                    st.markdown(html_barra_mo, unsafe_allow_html=True)
+
+            else:
+                # Placeholder Materiales
+                st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+                st.info("📦 **Módulo de Análisis Detallado por Proveedor de Materiales** en preparación para la siguiente fase. Aquí podrás auditar compras directas, remisiones y facturas de insumos por proveedor.")
+                st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 
     # Distribución global inicial
     df_dist = _calcular_df_distribucion("Total Acumulado")
@@ -529,62 +853,7 @@ def render_dashboard_tab(supabase, user_id: str, lista_proyectos: list, get_conc
                 st.warning(f"⚠️ **{n_sobre} Concepto{plural} Sobregirado{plural}**, revisa la sección de *Desglose por Estimación y Concepto* para obtener más detalles.")
 
         st.markdown("<div style='height: 4px;'></div>", unsafe_allow_html=True)
-        with st.container(border=True):
-            col_dh, col_df = st.columns([1.6, 1.2])
-            with col_dh:
-                st.markdown("##### 📊 Distribución de Costos y Margen del Despacho:")
-            with col_df:
-                opciones_filtro_dona = ["Total Acumulado"] + [f"Estimación #{e['num_periodo']}" for e in estimaciones_dash]
-                sel_filtro_dona = st.selectbox(
-                    "Filtrar distribución:",
-                    options=opciones_filtro_dona,
-                    key="dash_filtro_dona_priv",
-                    label_visibility="collapsed"
-                )
-
-            df_dist_plot = _calcular_df_distribucion(sel_filtro_dona)
-            col_chart, col_legend_table = st.columns([1.05, 1.35])
-            with col_chart:
-                chart_obj = _crear_grafica_dona(df_dist_plot)
-                if chart_obj:
-                    st.altair_chart(chart_obj, use_container_width=True)
-                else:
-                    st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
-                    st.info("💡 **Este periodo no cuenta con desglose analítico (APUs) en su catálogo ni destajistas asignados en campo.**\n\nRegistra estos costos para ver la distribución real.")
-            with col_legend_table:
-                st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
-                st.dataframe(
-                    df_dist_plot[["Rubro", "Importe", "Porcentaje", "Estatus"]],
-                    column_config={
-                        "Rubro": st.column_config.TextColumn("Rubro", width=145),
-                        "Importe": st.column_config.NumberColumn("Importe", format="$%,.2f", width=105),
-                        "Porcentaje": st.column_config.NumberColumn("% Total", format="%.1f%%", width=70),
-                        "Estatus": st.column_config.TextColumn("Estatus", width=240)
-                    },
-                    hide_index=True,
-                    use_container_width=True
-                )
-
-                # Barra de Liquidación Contable y Fiscal (Opción B)
-                sub_sel = float(df_dist_plot["Importe"].sum())
-                iva_sel = round(sub_sel * (pct_iva_proy / 100.0), 2) if pct_iva_proy > 0 else 0.0
-                tot_iva_sel = round(sub_sel + iva_sel, 2)
-                lbl_iva_sel = f"+${iva_sel:,.2f} ({pct_iva_proy:.1f}%)" if pct_iva_proy > 0 else "$0.00 (Exento)"
-
-                html_barra_fiscal = (
-                    f"<div style='"
-                    f"display: flex; justify-content: space-between; align-items: center; "
-                    f"background: rgba(14, 165, 233, 0.06); "
-                    f"border: 1px solid rgba(14, 165, 233, 0.22); "
-                    f"border-radius: 8px; padding: 7px 12px; margin-top: 8px; margin-bottom: 8px; "
-                    f"font-size: 0.86rem;'>"
-                    f"<div>🏷️ <span style='color: #64748B;'>Subtotal:</span> <b>${sub_sel:,.2f}</b></div>"
-                    f"<div>🏛️ <span style='color: #64748B;'>IVA:</span> <b>{lbl_iva_sel}</b></div>"
-                    f"<div>💳 <span style='color: #0284C7;'>Total c/IVA:</span> <b style='color: #0369A1; font-size: 0.95rem;'>${tot_iva_sel:,.2f}</b></div>"
-                    f"</div>\n"
-                    f"<div style='height: 4px;'></div>"
-                )
-                st.markdown(html_barra_fiscal, unsafe_allow_html=True)
+        _render_contenedor_distribucion("priv")
 
     else:
         # ---------------- MODO MIXTA / INTEGRAL (COLUMNAS PARALELAS) ----------------
@@ -660,62 +929,7 @@ def render_dashboard_tab(supabase, user_id: str, lista_proyectos: list, get_conc
                     st.success("🟢 Rentabilidad y nómina bajo control.")
 
         st.markdown("<div style='height: 4px;'></div>", unsafe_allow_html=True)
-        with st.container(border=True):
-            col_dh_m, col_df_m = st.columns([1.6, 1.2])
-            with col_dh_m:
-                st.markdown("##### 📊 Distribución de Costos y Margen del Despacho:")
-            with col_df_m:
-                opciones_filtro_dona_m = ["Total Acumulado"] + [f"Estimación #{e['num_periodo']}" for e in estimaciones_dash]
-                sel_filtro_dona_m = st.selectbox(
-                    "Filtrar distribución:",
-                    options=opciones_filtro_dona_m,
-                    key="dash_filtro_dona_mixta",
-                    label_visibility="collapsed"
-                )
-
-            df_dist_plot_m = _calcular_df_distribucion(sel_filtro_dona_m)
-            col_chart, col_legend_table = st.columns([1.05, 1.35])
-            with col_chart:
-                chart_obj = _crear_grafica_dona(df_dist_plot_m)
-                if chart_obj:
-                    st.altair_chart(chart_obj, use_container_width=True)
-                else:
-                    st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
-                    st.info("💡 **Este periodo no cuenta con desglose analítico (APUs) en su catálogo ni destajistas asignados en campo.**\n\nRegistra estos costos para ver la distribución real.")
-            with col_legend_table:
-                st.markdown("<div style='height: 8px;'></div>", unsafe_allow_html=True)
-                st.dataframe(
-                    df_dist_plot_m[["Rubro", "Importe", "Porcentaje", "Estatus"]],
-                    column_config={
-                        "Rubro": st.column_config.TextColumn("Rubro", width=145),
-                        "Importe": st.column_config.NumberColumn("Importe", format="$%,.2f", width=105),
-                        "Porcentaje": st.column_config.NumberColumn("% Total", format="%.1f%%", width=70),
-                        "Estatus": st.column_config.TextColumn("Estatus", width=240)
-                    },
-                    hide_index=True,
-                    use_container_width=True
-                )
-
-                # Barra de Liquidación Contable y Fiscal (Opción B)
-                sub_sel_m = float(df_dist_plot_m["Importe"].sum())
-                iva_sel_m = round(sub_sel_m * (pct_iva_proy / 100.0), 2) if pct_iva_proy > 0 else 0.0
-                tot_iva_sel_m = round(sub_sel_m + iva_sel_m, 2)
-                lbl_iva_sel_m = f"+${iva_sel_m:,.2f} ({pct_iva_proy:.1f}%)" if pct_iva_proy > 0 else "$0.00 (Exento)"
-
-                html_barra_fiscal_m = (
-                    f"<div style='"
-                    f"display: flex; justify-content: space-between; align-items: center; "
-                    f"background: rgba(14, 165, 233, 0.06); "
-                    f"border: 1px solid rgba(14, 165, 233, 0.22); "
-                    f"border-radius: 8px; padding: 7px 12px; margin-top: 8px; margin-bottom: 8px; "
-                    f"font-size: 0.86rem;'>"
-                    f"<div>🏷️ <span style='color: #64748B;'>Subtotal:</span> <b>${sub_sel_m:,.2f}</b></div>"
-                    f"<div>🏛️ <span style='color: #64748B;'>IVA:</span> <b>{lbl_iva_sel_m}</b></div>"
-                    f"<div>💳 <span style='color: #0284C7;'>Total c/IVA:</span> <b style='color: #0369A1; font-size: 0.95rem;'>${tot_iva_sel_m:,.2f}</b></div>"
-                    f"</div>\n"
-                    f"<div style='height: 4px;'></div>"
-                )
-                st.markdown(html_barra_fiscal_m, unsafe_allow_html=True)
+        _render_contenedor_distribucion("mixta")
 
     st.markdown("<div style='height: 10px;'></div>", unsafe_allow_html=True)
 

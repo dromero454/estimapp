@@ -228,6 +228,44 @@ Se unificaron las leyendas a estados universales, legibles e inmediatos, incorpo
    - Todas cuentan con formato porcentual (`%.2f%%`), paso de `0.5%` y valor mínimo de `0.0%`.
    - El bucle de guardado atómico detecta cambios en cualquiera de los 4 factores, persiste en `proyectos` e invalida la caché `get_proyectos_cache_fn.clear()`, sincronizando instantáneamente las metas y cálculos en el **Resumen Financiero (Tab 1)**.
 
+### 5.7 Tab de Proyectos: Depuración de Tooltips y Campos Geográficos
+1. **Limpieza de Tooltips de Factores**:
+   - Se removió la palabra redundante *"Porcentaje"* en los tooltips de los campos `% Indirectos`, `% Utilidad` y `% Herramienta`, unificando su redacción a *"Valor objetivo de..."*, manteniendo el tooltip de IVA intacto.
+2. **Campos Geográficos de Latitud y Longitud**:
+   - Etiquetas simplificadas estrictamente a `"Latitud"` y `"Longitud"` (eliminando el sufijo `"WGS84 (Telemetría Clima)"`).
+   - Tooltips simplificados a: `"Coordenada geográfica devuelta por OpenStreetMap para Open-Meteo (solo lectura)."`.
+
+### 5.8 Resumen Financiero: Tablero Dinámico de Análisis y Zoom de Mano de Obra (Fases 1 y 2)
+1. **Contenedor Único y Dinámico con Selector Dual**:
+   - Se transformó el contenedor de *Distribución de Costos y Margen del Despacho* en un módulo dinámico reutilizable (`_render_contenedor_distribucion()`), operando tanto en modalidad `privada` como `mixta`.
+   - Incorpora dos selectores compactos en su cabecera:
+     - **Enfoque de Análisis**: `📊 General: Costos y Margen` | `👷 Mano de Obra: Trabajadores y Destajos` | `📦 Materiales: Por Proveedor (Próximamente)`.
+     - **Periodo**: `Total Acumulado` | `Estimación #1` | `Estimación #2` (reactivo según estimaciones del proyecto).
+2. **Zoom de Mano de Obra (Fase 2) y Refinamiento Estético de Layout**:
+   - **Alineación de Selectores al 50%/50%**:
+     - Los dos selectores (`Enfoque de Análisis:` y `Filtrar periodo:`) se anclaron en una sub-columna con distribución exacta `st.columns(2)` sobre la columna derecha (`col_hdr_der`, peso 1.4), garantizando alineación milimétrica con los bordes izquierdo y derecho de las tablas tanto en *Costos y Margen* como en *Mano de Obra*.
+   - **Eliminación de KPIs Flotantes**:
+     - Se retiraron las 4 tarjetas métricas flotantes para restaurar la altura y separación vertical limpia original del contenedor.
+   - **Posición Centrada de la Dona y Leyenda Lateral Superior**:
+     - Se restauró la posición centrada y cómoda de la dona (`x=175`, `outerRadius=105`), devolviéndole su holgura visual respecto al borde izquierdo.
+     - La leyenda (`Personal / Asignación` y `Rubro Financiero`) se posicionó inmediatamente al lado derecho de la dona (`legendX=305`), manteniendo su título perfectamente nivelado al ras del borde superior del encabezado de la tabla (`legendY=8`).
+     - Esta simetría armónica se aplica idénticamente en *Costos y Margen* y en *Mano de Obra*.
+   - **Tooltips Flotantes Estilo BaseWeb / Streamlit en Cinta Inferior**:
+     - Se reemplazó el icono y tooltip nativo por badges SVG `(?)` idénticos a los KPIs oficiales de Streamlit, desplegando tarjetas popover flotantes oscuras (`#1E293B`, texto blanco, esquinas `6px`, sombra y flecha indicadora) con animación instantánea sin desbordamientos.
+   - **Tabla de Auditoría y Desglose**:
+     - Columnas: `Trabajador / Cuadrilla`, `Modalidad`, `Importe`, `% Total`, `Estatus`.
+     - Reglas de semáforo de estatus:
+       - *Destajo*: `🟢 Liquidado por volumen`.
+       - *Jornada*: `🟢 Desquitado (+X%)` o `🔴 En déficit (-X%)` evaluando valor generado vs salario devengado.
+       - *Sin Asignar*: `⚠️ Pendiente asignar en Tab de Captura en Campo`.
+   - **Cinta Resumen de Nómina**:
+     - Replica la estética de la barra fiscal con acento teal (`rgba(13, 148, 136, 0.06)`):
+       `🔨 Destajos: $X,XXX.XX` | `⏱️ Jornadas: $X,XXX.XX` | `⚠️ Sin Asignar: $X,XXX.XX` | `💳 Nómina Total: $X,XXX.XX`.
+3. **Paridad Matemática al 100% con Tab 3 (Estimaciones y Liquidación)**:
+   - **Total Acumulado**: Gran Total `$7,246.80` (Destajos `$4,246.80`, Jornadas `$1,000.00`, Sin Asignar `$2,000.00`).
+   - **Estimación #1**: Gran Total `$2,685.00` (Carlos Jurado `$2,075.00`, Paco Pedro `$500.00`, Juan García `$110.00`, Sin Asignar `$0.00`).
+   - **Estimación #2**: Gran Total `$4,561.80` (Sin Asignar `$2,000.00`, Carlos Jurado `$1,811.80`, Paco Pedro `$500.00`, Juan García `$250.00`).
+
 ---
 
 ## 6. Recomendaciones para el Superadministrador y Agentes Futuros
@@ -238,3 +276,4 @@ Se unificaron las leyendas a estados universales, legibles e inmediatos, incorpo
    Cualquier consulta nueva sobre `mediciones_campo` o `personal_obra` debe incluir el filtrado explícito por `user_id` o pertenencia del proyecto a la sesión activa.
 3. **Mantenimiento de KaTeX y HTML**:
    Al redactar cadenas de texto dinámicas para `st.markdown()`, si se utilizan etiquetas HTML con `unsafe_allow_html=True`, los símbolos de moneda `$` no deben ser escapados con `\$`, ya que el navegador los renderizará literalmente.
+
