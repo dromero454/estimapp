@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 from supabase import Client
+from modulos.db_engine import get_proveedores
 
 GIROS_LIST = [
     "Materiales",
@@ -89,6 +90,7 @@ def render_proveedores_tab(supabase: Client, user_id: str):
                                 "giro": giro_final
                             }).execute()
 
+                            get_proveedores.clear()
                             st.session_state["proveedor_form_counter"] += 1
                             st.success(f"✅ Proveedor '{nombre_comercial.strip()}' registrado exitosamente.")
                             st.rerun()
@@ -143,6 +145,7 @@ def render_proveedores_tab(supabase: Client, user_id: str):
                     id_prov_del = prov_dict_del[prov_sel_del]
                     try:
                         supabase.table("proveedores").delete().eq("id", id_prov_del).execute()
+                        get_proveedores.clear()
                         st.session_state["proveedor_form_counter"] += 1
                         st.success("✅ Proveedor eliminado del directorio.")
                         st.rerun()
@@ -274,6 +277,7 @@ def render_proveedores_tab(supabase: Client, user_id: str):
             st.session_state.pop(ed_prov_key, None)
             st.rerun()
         elif cambios_guardados > 0:
+            get_proveedores.clear()
             st.toast("✅ Datos de proveedores actualizados correctamente.", icon="✅")
             st.session_state["ed_proveedor_counter"] += 1
             st.session_state.pop(ed_prov_key, None)

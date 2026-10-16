@@ -9,6 +9,7 @@ from modulos.db_engine import (
     get_biblioteca_instituciones,
     get_biblioteca_conceptos,
     get_mediciones,
+    get_proveedores,
     extraer_nombre_archivo,
     generar_plantilla_excel,
     procesar_excel_importacion
@@ -19,6 +20,16 @@ def render_catalogo_tab(supabase: Client, user_id: str, lista_proyectos: list, g
     if not lista_proyectos:
         st.warning("Primero debes registrar un proyecto en la pestaña 'Gestión de Proyectos'.")
         return
+
+    # Mapeo de proveedores comerciales registrados por el usuario
+    proveedores_user = get_proveedores(user_id)
+    proveedores_dict_label = {
+        p["id"]: f"{p['nombre_comercial']} ({p['giro']})" if p.get("giro") else p["nombre_comercial"]
+        for p in proveedores_user
+    }
+    label_to_prov_id = {v: k for k, v in proveedores_dict_label.items()}
+    SIN_ASIGNAR_LABEL = "— Sin Asignar —"
+    prov_options_list = [SIN_ASIGNAR_LABEL] + list(proveedores_dict_label.values())
 
     proyectos_dict = {p["nombre_obra"]: p["id"] for p in lista_proyectos}
     proy_sel = st.selectbox("Seleccionar Proyecto Destino", list(proyectos_dict.keys()), key="cat_proy_2")
@@ -135,11 +146,13 @@ def render_catalogo_tab(supabase: Client, user_id: str, lista_proyectos: list, g
         # Carga Masiva Excel
         ts_descarga = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         with st.expander("📂 Subir desde Excel (Carga Masiva al Contrato)"):
+            st.caption("💡 **Tip de gestión comercial**: La plantilla de Excel mantiene el estándar contractual oficial. Si deseas asociar proveedores de materiales a tus conceptos, podrás hacerlo fácilmente haciendo doble clic sobre la columna **Proveedor Mat.** en la tabla interactiva 'Presupuesto Oficial del Proyecto' al finalizar la importación.")
             st.download_button(
                 "📥 Descargar Plantilla Oficial Excel",
                 data=generar_plantilla_excel("proyecto"),
                 file_name=f"Plantilla_Cat_Proyecto_{ts_descarga}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                help="Descarga la plantilla oficial en formato .xlsx para cargar conceptos en lote."
             )
             up_proy_k = st.session_state.get("up_proy_key", 0)
             excel_proy = st.file_uploader("Sube plantilla llena:", type=["xlsx"], key=f"up_proy_{up_proy_k}")
@@ -199,6 +212,13 @@ def render_catalogo_tab(supabase: Client, user_id: str, lista_proyectos: list, g
                 value=st.session_state.get(f"cat_util_{cat_c}", pct_util_proy_def),
                 step=0.5, format="%.2f",
                 key=f"cat_util_{cat_c}", on_change=_on_costos_cat_change
+            )
+
+            prov_sel_alta = st.selectbox(
+                "Proveedor de Materiales (Opcional)",
+                options=prov_options_list,
+                key=f"cat_prov_{cat_c}",
+                help="Asigna la casa de materiales o comercio que suministra los insumos principales de este concepto."
             )
 
             # Camino 2: Expander opcional de desglose analítico APU
@@ -265,6 +285,8 @@ def render_catalogo_tab(supabase: Client, user_id: str, lista_proyectos: list, g
                         if pu_final == 0.0 and suma_analitica > 0:
                             pu_final = round(suma_analitica * (1.0 + util_final / 100.0), 2)
 
+                        id_prov_final = label_to_prov_id.get(prov_sel_alta)
+
                         payload_conc = {
                             "id_proyecto": proy_id,
                             "especialidad": esp_m.strip(),
@@ -274,6 +296,7 @@ def render_catalogo_tab(supabase: Client, user_id: str, lista_proyectos: list, g
                             "unidad": u_m_norm,
                             "cantidad_contratada": cant_m_final,
                             "costo_material": mat_val,
+                            "id_proveedor": id_prov_final,
                             "costo_mano_obra": mo_val,
                             "costo_herramienta": herr_val,
                             "costo_indirecto": ind_val,
@@ -287,6 +310,7 @@ def render_catalogo_tab(supabase: Client, user_id: str, lista_proyectos: list, g
                             st.session_state["cat_alta_key"] = cat_c + 1
                             st.session_state.pop(f"cat_pu_{cat_c}", None)
                             st.session_state.pop(f"cat_util_{cat_c}", None)
+                            st.session_state.pop(f"cat_prov_{cat_c}", None)
                             st.success("✅ Concepto guardado exitosamente.")
                             st.rerun()
                         except Exception as ex_cat_ins:
@@ -352,6 +376,14 @@ def render_catalogo_tab(supabase: Client, user_id: str, lista_proyectos: list, g
         df_c["descripcion"] = df_c["descripcion"].fillna("").astype(str)
         df_c["cantidad_contratada"] = pd.to_numeric(df_c["cantidad_contratada"], errors="coerce").fillna(0.0).astype(float).round(2)
         df_c["costo_material"] = pd.to_numeric(df_c.get("costo_material"), errors="coerce").fillna(0.0).astype(float).round(2)
+
+        if "id_proveedor" in df_c.columns:
+            df_c["proveedor"] = df_c["id_proveedor"].map(
+                lambda x: proveedores_dict_label.get(x, SIN_ASIGNAR_LABEL) if pd.notna(x) and x else SIN_ASIGNAR_LABEL
+            )
+        else:
+            df_c["proveedor"] = SIN_ASIGNAR_LABEL
+
         df_c["costo_mano_obra"] = pd.to_numeric(df_c.get("costo_mano_obra"), errors="coerce").fillna(0.0).astype(float).round(2)
         df_c["costo_herramienta"] = pd.to_numeric(df_c.get("costo_herramienta"), errors="coerce").fillna(0.0).astype(float).round(2)
         df_c["costo_indirecto"] = pd.to_numeric(df_c.get("costo_indirecto"), errors="coerce").fillna(0.0).astype(float).round(2)
@@ -363,7 +395,7 @@ def render_catalogo_tab(supabase: Client, user_id: str, lista_proyectos: list, g
         edited_catalogo = st.data_editor(
             df_c[[
                 "#", "clave", "especialidad", "categoria", "unidad", "cantidad_contratada",
-                "costo_material", "costo_mano_obra", "costo_herramienta", "costo_indirecto",
+                "costo_material", "proveedor", "costo_mano_obra", "costo_herramienta", "costo_indirecto",
                 "porcentaje_utilidad", "precio_unitario", "descripcion"
             ]],
             column_config={
@@ -374,6 +406,12 @@ def render_catalogo_tab(supabase: Client, user_id: str, lista_proyectos: list, g
                 "unidad": st.column_config.SelectboxColumn("Unidad", options=unidades_list, required=True),
                 "cantidad_contratada": st.column_config.NumberColumn("Cant. Contratada", format="%.2f", min_value=0.0, step=0.01, required=True),
                 "costo_material": st.column_config.NumberColumn("Costo Mat. ($)", format="$%.2f", min_value=0.0, step=0.01),
+                "proveedor": st.column_config.SelectboxColumn(
+                    "Proveedor Mat.",
+                    options=prov_options_list,
+                    help="Casa de materiales o proveedor asignado a este concepto",
+                    required=False
+                ),
                 "costo_mano_obra": st.column_config.NumberColumn("Costo M.O. ($)", format="$%.2f", min_value=0.0, step=0.01),
                 "costo_herramienta": st.column_config.NumberColumn("Costo Herr. ($)", format="$%.2f", min_value=0.0, step=0.01),
                 "costo_indirecto": st.column_config.NumberColumn("Costo Ind. ($)", format="$%.2f", min_value=0.0, step=0.01),
@@ -412,6 +450,13 @@ def render_catalogo_tab(supabase: Client, user_id: str, lista_proyectos: list, g
                 for campo in ["especialidad", "categoria", "descripcion"]:
                     if campo in col_vals:
                         up_payload[campo] = str(col_vals[campo] or "").strip()
+
+                if "proveedor" in col_vals:
+                    val_prov = col_vals["proveedor"]
+                    if val_prov and val_prov in label_to_prov_id:
+                        up_payload["id_proveedor"] = label_to_prov_id[val_prov]
+                    else:
+                        up_payload["id_proveedor"] = None
 
                 if "unidad" in col_vals:
                     val_u = col_vals["unidad"]

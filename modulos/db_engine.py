@@ -104,6 +104,12 @@ def get_mediciones(id_estimacion: int):
     ).eq("id_estimacion", id_estimacion).order("id").execute()
     return res.data or []
 
+@st.cache_data(show_spinner=False, ttl=60)
+def get_proveedores(user_id: str):
+    supabase = st.session_state["supabase_client"]
+    res = supabase.table("proveedores").select("id, user_id, nombre_comercial, contacto, telefono, giro").eq("user_id", user_id).order("nombre_comercial").execute()
+    return res.data or []
+
 def generar_plantilla_excel(tipo="biblioteca"):
     output = io.BytesIO()
     if tipo == "biblioteca":

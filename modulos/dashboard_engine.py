@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import datetime
 import altair as alt
-from modulos.db_engine import normalizar_unidad
+from modulos.db_engine import normalizar_unidad, get_proveedores
 from modulos.pdf_engine import generar_pdf_resumen_ejecutivo
 
 
@@ -34,6 +34,9 @@ def render_dashboard_tab(supabase, user_id: str, lista_proyectos: list, get_conc
     if not conceptos_dash:
         st.warning("Este proyecto no tiene conceptos en su catálogo.")
         return
+
+    proveedores_dash = get_proveedores(user_id)
+    dict_proveedores = {p["id"]: p for p in proveedores_dash}
 
     dict_conceptos_info = {c["id"]: c for c in conceptos_dash}
     monto_contratado_total = sum(
@@ -311,6 +314,67 @@ def render_dashboard_tab(supabase, user_id: str, lista_proyectos: list, get_conc
             strokeWidth=0
         )
 
+    # Helper para gráfica de dona interactiva de Materiales y Proveedores con Altair
+    def _crear_grafica_dona_mat(df_mat_data):
+        df_plot = df_mat_data[df_mat_data["Importe"] > 0]
+        if df_plot.empty:
+            return None
+        palette_mat = [
+            "#2563EB", "#0284C7", "#0D9488", "#10B981", "#8B5CF6", 
+            "#EC4899", "#6366F1", "#14B8A6", "#3B82F6", "#4F46E5"
+        ]
+        
+        domain_provs = []
+        range_colors = []
+        c_idx = 0
+
+        for p in df_plot["Proveedor"].tolist():
+            if p not in ("Materiales sin Asignar", "📦 Otros Proveedores (Consolidado)"):
+                domain_provs.append(p)
+                range_colors.append(palette_mat[c_idx % len(palette_mat)])
+                c_idx += 1
+
+        if "📦 Otros Proveedores (Consolidado)" in df_plot["Proveedor"].values:
+            domain_provs.append("📦 Otros Proveedores (Consolidado)")
+            range_colors.append("#64748B")
+
+        if "Materiales sin Asignar" in df_plot["Proveedor"].values:
+            domain_provs.append("Materiales sin Asignar")
+            range_colors.append("#F59E0B")
+
+        return alt.Chart(df_plot).mark_arc(
+            x=175, y=120, innerRadius=65, outerRadius=105, stroke="#ffffff", strokeWidth=2
+        ).encode(
+            theta=alt.Theta(field="Importe", type="quantitative"),
+            color=alt.Color(
+                field="Proveedor",
+                type="nominal",
+                scale=alt.Scale(
+                    domain=domain_provs,
+                    range=range_colors
+                ),
+                legend=alt.Legend(
+                    title="Proveedor / Comercio",
+                    orient="none",
+                    legendX=305,
+                    legendY=8,
+                    labelFontSize=11,
+                    titleFontSize=12,
+                    symbolType="circle"
+                )
+            ),
+            tooltip=[
+                alt.Tooltip("Proveedor:N", title="Proveedor / Comercio"),
+                alt.Tooltip("Giro:N", title="Giro Comercial"),
+                alt.Tooltip("Importe:Q", title="Gasto Estimado ($)", format="$,.2f"),
+                alt.Tooltip("Participacion:N", title="% Participación")
+            ]
+        ).properties(
+            height=240
+        ).configure_view(
+            strokeWidth=0
+        )
+
     # Pre-cálculo de costos analíticos por periodo de estimación
     costos_por_est = {}
     for e_item in estimaciones_dash:
@@ -555,6 +619,133 @@ def render_dashboard_tab(supabase, user_id: str, lista_proyectos: list, get_conc
         }
         return df_mo, kpis_mo
 
+    # Helper para calcular la auditoría y distribución de materiales por proveedor
+    def _calcular_df_materiales(sel_filtro):
+        if sel_filtro == "Total Acumulado":
+            ests_a_procesar = estimaciones_dash
+        else:
+            try:
+                num_p = int(str(sel_filtro).replace("Estimación #", "").strip())
+                ests_a_procesar = [e for e in estimaciones_dash if e["num_periodo"] == num_p]
+            except Exception:
+                ests_a_procesar = estimaciones_dash
+
+        all_meds = []
+        for e in ests_a_procesar:
+            meds_e = get_mediciones(e["id"])
+            for m in meds_e:
+                m_copy = dict(m)
+                m_copy["_id_estimacion"] = e["id"]
+                all_meds.append(m_copy)
+
+        tot_asignado = 0.0
+        tot_sin_asignar = 0.0
+        provs_accum = {}
+
+        for m in all_meds:
+            c_id = m.get("id_concepto")
+            c_info = dict_conceptos_info.get(c_id, {})
+            vol = float(m.get("cantidad_total") or 0.0)
+            pu_mat = float(c_info.get("costo_material") or 0.0)
+            m_val = round(vol * pu_mat, 2)
+
+            if m_val <= 0:
+                continue
+
+            id_prov = c_info.get("id_proveedor")
+            if not id_prov or id_prov not in dict_proveedores:
+                tot_sin_asignar += m_val
+                k = "sin_asignar"
+                if k not in provs_accum:
+                    provs_accum[k] = {
+                        "Proveedor": "Materiales sin Asignar",
+                        "Giro": "Sin Asignar",
+                        "Importe": 0.0,
+                        "Estatus": "⚠️ Pendiente asignar en Catálogo",
+                        "is_sin_asignar": True
+                    }
+                provs_accum[k]["Importe"] += m_val
+            else:
+                p_obj = dict_proveedores[id_prov]
+                nom = p_obj["nombre_comercial"]
+                giro = p_obj.get("giro") or "Materiales"
+                k = id_prov
+                if k not in provs_accum:
+                    provs_accum[k] = {
+                        "Proveedor": nom,
+                        "Giro": giro,
+                        "Importe": 0.0,
+                        "Estatus": "🟢 Proveedor Asignado",
+                        "is_sin_asignar": False
+                    }
+                provs_accum[k]["Importe"] += m_val
+                tot_asignado += m_val
+
+        gran_total = round(tot_asignado + tot_sin_asignar, 2)
+        tot_asignado = round(tot_asignado, 2)
+        tot_sin_asignar = round(tot_sin_asignar, 2)
+
+        # 1. Tabla completa (100% de los proveedores ordenados por importe descendente)
+        filas_tabla = []
+        for k, p in provs_accum.items():
+            imp = round(p["Importe"], 2)
+            pct = round((imp / gran_total * 100.0), 1) if gran_total > 0 else 0.0
+            filas_tabla.append({
+                "Proveedor": p["Proveedor"],
+                "Giro": p["Giro"],
+                "Importe": imp,
+                "Porcentaje": pct,
+                "Participacion": f"{pct:.1f}%",
+                "Estatus": p["Estatus"],
+                "is_sin_asignar": p.get("is_sin_asignar", False)
+            })
+
+        filas_tabla.sort(key=lambda x: x["Importe"], reverse=True)
+        df_mat_table = pd.DataFrame(filas_tabla)
+        if df_mat_table.empty:
+            df_mat_table = pd.DataFrame(columns=["Proveedor", "Giro", "Importe", "Porcentaje", "Participacion", "Estatus"])
+
+        # 2. Dataset para la Dona: Top 7 + "Otros Proveedores (Consolidado)"
+        provs_validos = [f for f in filas_tabla if not f.get("is_sin_asignar")]
+        sin_asig = [f for f in filas_tabla if f.get("is_sin_asignar")]
+
+        filas_chart = []
+        if len(provs_validos) <= 8:
+            filas_chart.extend(provs_validos)
+        else:
+            top7 = provs_validos[:7]
+            resto = provs_validos[7:]
+            imp_resto = round(sum(r["Importe"] for r in resto), 2)
+            pct_resto = round((imp_resto / gran_total * 100.0), 1) if gran_total > 0 else 0.0
+            filas_chart.extend(top7)
+            filas_chart.append({
+                "Proveedor": "📦 Otros Proveedores (Consolidado)",
+                "Giro": "Consolidado",
+                "Importe": imp_resto,
+                "Porcentaje": pct_resto,
+                "Participacion": f"{pct_resto:.1f}%",
+                "Estatus": f"🟢 {len(resto)} proveedores menores",
+                "is_sin_asignar": False
+            })
+
+        if sin_asig:
+            filas_chart.extend(sin_asig)
+
+        df_mat_chart = pd.DataFrame(filas_chart)
+        if df_mat_chart.empty:
+            df_mat_chart = pd.DataFrame(columns=["Proveedor", "Giro", "Importe", "Porcentaje", "Participacion", "Estatus"])
+
+        num_comercios = len([k for k in provs_accum.keys() if k != "sin_asignar" and provs_accum[k]["Importe"] > 0])
+
+        kpis_mat = {
+            "total": gran_total,
+            "asignado": tot_asignado,
+            "sin_asignar": tot_sin_asignar,
+            "num_comercios": num_comercios
+        }
+
+        return df_mat_table, df_mat_chart, kpis_mat
+
     # Helper maestro para renderizar el contenedor unificado y dinámico de análisis y distribución
     def _render_contenedor_distribucion(key_suffix: str):
         with st.container(border=True):
@@ -567,7 +758,7 @@ def render_dashboard_tab(supabase, user_id: str, lista_proyectos: list, get_conc
                         options=[
                             "📊 General: Costos y Margen",
                             "👷 Mano de Obra: Trabajadores y Destajos",
-                            "📦 Materiales: Por Proveedor (Próximamente)"
+                            "📦 Materiales: Desglose por Proveedor"
                         ],
                         key=f"dash_enfoque_{key_suffix}",
                         label_visibility="collapsed"
@@ -584,7 +775,7 @@ def render_dashboard_tab(supabase, user_id: str, lista_proyectos: list, get_conc
                 if sel_enfoque == "👷 Mano de Obra: Trabajadores y Destajos":
                     st.markdown("##### 👷 Análisis de Mano de Obra y Nómina:")
                 elif sel_enfoque.startswith("📦"):
-                    st.markdown("##### 📦 Análisis de Materiales e Insumos:")
+                    st.markdown("##### 📦 Análisis de Materiales y Proveedores:")
                 else:
                     st.markdown("##### 📊 Distribución de Costos y Margen del Despacho:")
 
@@ -601,6 +792,7 @@ def render_dashboard_tab(supabase, user_id: str, lista_proyectos: list, get_conc
                 with col_legend_table:
                     st.dataframe(
                         df_dist_plot[["Rubro", "Importe", "Porcentaje", "Estatus"]],
+                        height=220,
                         column_config={
                             "Rubro": st.column_config.TextColumn("Rubro", width=145),
                             "Importe": st.column_config.NumberColumn("Importe", format="$%,.2f", width=105),
@@ -646,6 +838,7 @@ def render_dashboard_tab(supabase, user_id: str, lista_proyectos: list, get_conc
                 with col_legend_table:
                     st.dataframe(
                         df_mo_plot[["Trabajador", "Modalidad", "Importe", "Porcentaje", "Estatus"]],
+                        height=220,
                         column_config={
                             "Trabajador": st.column_config.TextColumn("Trabajador / Cuadrilla", width=170),
                             "Modalidad": st.column_config.TextColumn("Modalidad", width=90),
@@ -673,7 +866,7 @@ def render_dashboard_tab(supabase, user_id: str, lista_proyectos: list, get_conc
 
                     html_barra_mo = (
                         f"<style>\n"
-                        f".st-tip-wrap {{ position: relative; display: inline-flex; align-items: center; cursor: help; margin-left: 5px; vertical-align: middle; }}\n"
+                        f".st-tip-wrap {{ position: relative; display: inline-flex; align-items: center; cursor: help; margin-left: 5px; vertical-align: middle; white-space: nowrap; }}\n"
                         f".st-tip-icon {{ color: #64748B; opacity: 0.75; transition: opacity 0.15s ease, color 0.15s ease; display: inline-flex; align-items: center; }}\n"
                         f".st-tip-wrap:hover .st-tip-icon {{ opacity: 1; color: #0F172A; }}\n"
                         f".st-tip-box {{ visibility: hidden; opacity: 0; position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%); background: #1E293B; color: #F8FAFC; font-size: 0.76rem; font-weight: 400; line-height: 1.35; padding: 7px 11px; border-radius: 6px; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22); white-space: normal; width: max-content; max-width: 250px; z-index: 9999; pointer-events: none; transition: opacity 0.2s ease, transform 0.2s ease; }}\n"
@@ -691,14 +884,14 @@ def render_dashboard_tab(supabase, user_id: str, lista_proyectos: list, get_conc
                         f"background: rgba(13, 148, 136, 0.06); "
                         f"border: 1px solid rgba(13, 148, 136, 0.22); "
                         f"border-radius: 8px; padding: 7px 12px; margin-top: 8px; margin-bottom: 8px; "
-                        f"font-size: 0.86rem;'>"
-                        f"<div>🔨 <span style='color: #64748B;'>Destajos:</span> <b>${tot_dest:,.2f}</b>"
+                        f"font-size: 0.83rem; white-space: nowrap;'>"
+                        f"<div style='display: inline-flex; align-items: center; white-space: nowrap;'>🔨&nbsp;<span style='color: #64748B;'>Destajos:</span>&nbsp;<b>${tot_dest:,.2f}</b>"
                         f"<span class='st-tip-wrap'><span class='st-tip-icon'>{svg_help}</span><span class='st-tip-box st-tip-box-left'>Mano de obra devengada por destajistas según volumen ejecutado y costo unitario de catálogo.</span></span></div>"
-                        f"<div>⏱️ <span style='color: #64748B;'>Jornadas:</span> <b>${tot_jor:,.2f}</b>"
+                        f"<div style='display: inline-flex; align-items: center; white-space: nowrap;'>⏱️&nbsp;<span style='color: #64748B;'>Jornadas:</span>&nbsp;<b>${tot_jor:,.2f}</b>"
                         f"<span class='st-tip-wrap'><span class='st-tip-icon'>{svg_help}</span><span class='st-tip-box'>Salarios devengados en campo pagados por jornal diario.</span></span></div>"
-                        f"<div>⚠️ <span style='color: #64748B;'>Sin Asignar:</span> <b>${tot_sin:,.2f}</b>"
+                        f"<div style='display: inline-flex; align-items: center; white-space: nowrap;'>⚠️&nbsp;<span style='color: #64748B;'>Sin Asignar:</span>&nbsp;<b>${tot_sin:,.2f}</b>"
                         f"<span class='st-tip-wrap'><span class='st-tip-icon'>{svg_help}</span><span class='st-tip-box'>💡 Costo de mano de obra contemplado en catálogo para mediciones cuantificadas que aún no tienen un trabajador o cuadrilla responsable asignado en la Tab de Captura en Campo.</span></span></div>"
-                        f"<div>💳 <span style='color: #0F766E;'>Nómina Total:</span> <b style='color: #0D9488; font-size: 0.95rem;'>${sub_mo:,.2f}</b>"
+                        f"<div style='display: inline-flex; align-items: center; white-space: nowrap;'>💳&nbsp;<span style='color: #0F766E;'>Nómina Total:</span>&nbsp;<b style='color: #0D9488; font-size: 0.93rem;'>${sub_mo:,.2f}</b>"
                         f"<span class='st-tip-wrap'><span class='st-tip-icon'>{svg_help}</span><span class='st-tip-box st-tip-box-right'>Suma total de destajos pagados, jornadas devengadas y mano de obra contemplada sin asignar en el periodo seleccionado.</span></span></div>"
                         f"</div>\n"
                         f"<div style='height: 4px;'></div>"
@@ -706,10 +899,79 @@ def render_dashboard_tab(supabase, user_id: str, lista_proyectos: list, get_conc
                     st.markdown(html_barra_mo, unsafe_allow_html=True)
 
             else:
-                # Placeholder Materiales
-                st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
-                st.info("📦 **Módulo de Análisis Detallado por Proveedor de Materiales** en preparación para la siguiente fase. Aquí podrás auditar compras directas, remisiones y facturas de insumos por proveedor.")
-                st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+                df_mat_table, df_mat_chart, kpis_mat_plot = _calcular_df_materiales(sel_filtro_dona)
+
+                col_chart, col_legend_table = st.columns([1.0, 1.4])
+                with col_chart:
+                    chart_mat = _crear_grafica_dona_mat(df_mat_chart)
+                    if chart_mat:
+                        st.altair_chart(chart_mat, use_container_width=True)
+                    else:
+                        st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+                        st.info("💡 **Este periodo no cuenta con consumos de materiales cuantificados en obra.**\n\nRegistra mediciones de avance en conceptos con costo de materiales en la Tab de Captura en Campo.")
+                with col_legend_table:
+                    st.dataframe(
+                        df_mat_table[["Proveedor", "Giro", "Importe", "Porcentaje", "Estatus"]],
+                        height=220,
+                        column_config={
+                            "Proveedor": st.column_config.TextColumn("Proveedor / Comercio", width=170),
+                            "Giro": st.column_config.TextColumn("Giro Comercial", width=120),
+                            "Importe": st.column_config.NumberColumn("Importe", format="$%,.2f", width=95),
+                            "Porcentaje": st.column_config.NumberColumn("% Total", format="%.1f%%", width=65),
+                            "Estatus": st.column_config.TextColumn("Estatus", width=260)
+                        },
+                        hide_index=True,
+                        use_container_width=True
+                    )
+
+                    # Barra resumen de suministros y proveedores con tooltips nativos BaseWeb
+                    sub_mat = kpis_mat_plot["total"]
+                    tot_asig = kpis_mat_plot["asignado"]
+                    tot_sin_mat = kpis_mat_plot["sin_asignar"]
+                    n_comercios = kpis_mat_plot["num_comercios"]
+                    lbl_com = "proveedor" if n_comercios == 1 else "proveedores"
+
+                    svg_help = (
+                        "<svg viewBox='0 0 16 16' width='14' height='14' fill='none' stroke='currentColor' stroke-width='1.5' "
+                        "style='display: inline-block; vertical-align: middle;'>"
+                        "<circle cx='8' cy='8' r='7'/>"
+                        "<path d='M8 11.5v-1M8 8a1.5 1.5 0 1 0-1.5-1.5'/>"
+                        "</svg>"
+                    )
+
+                    html_barra_mat = (
+                        f"<style>\n"
+                        f".st-tip-wrap {{ position: relative; display: inline-flex; align-items: center; cursor: help; margin-left: 5px; vertical-align: middle; white-space: nowrap; }}\n"
+                        f".st-tip-icon {{ color: #64748B; opacity: 0.75; transition: opacity 0.15s ease, color 0.15s ease; display: inline-flex; align-items: center; }}\n"
+                        f".st-tip-wrap:hover .st-tip-icon {{ opacity: 1; color: #0F172A; }}\n"
+                        f".st-tip-box {{ visibility: hidden; opacity: 0; position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%); background: #1E293B; color: #F8FAFC; font-size: 0.76rem; font-weight: 400; line-height: 1.35; padding: 7px 11px; border-radius: 6px; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22); white-space: normal; width: max-content; max-width: 250px; z-index: 9999; pointer-events: none; transition: opacity 0.2s ease, transform 0.2s ease; }}\n"
+                        f".st-tip-box::after {{ content: ''; position: absolute; top: 100%; left: 50%; transform: translateX(-50%); border-width: 5px; border-style: solid; border-color: #1E293B transparent transparent transparent; }}\n"
+                        f".st-tip-box-left {{ left: 0; transform: none; }}\n"
+                        f".st-tip-box-left::after {{ left: 10px; transform: none; }}\n"
+                        f".st-tip-box-right {{ right: 0; left: auto; transform: none; }}\n"
+                        f".st-tip-box-right::after {{ right: 10px; left: auto; transform: none; }}\n"
+                        f".st-tip-wrap:hover .st-tip-box {{ visibility: visible; opacity: 1; transform: translateX(-50%) translateY(-2px); }}\n"
+                        f".st-tip-wrap:hover .st-tip-box-left {{ visibility: visible; opacity: 1; transform: translateY(-2px); }}\n"
+                        f".st-tip-wrap:hover .st-tip-box-right {{ visibility: visible; opacity: 1; transform: translateY(-2px); }}\n"
+                        f"</style>\n"
+                        f"<div style='"
+                        f"display: flex; justify-content: space-between; align-items: center; "
+                        f"background: rgba(37, 99, 235, 0.06); "
+                        f"border: 1px solid rgba(37, 99, 235, 0.22); "
+                        f"border-radius: 8px; padding: 7px 12px; margin-top: 8px; margin-bottom: 8px; "
+                        f"font-size: 0.83rem; white-space: nowrap;'>"
+                        f"<div style='display: inline-flex; align-items: center; white-space: nowrap;'>🏢&nbsp;<span style='color: #64748B;'>Con Proveedor:</span>&nbsp;<b>${tot_asig:,.2f}</b>"
+                        f"<span class='st-tip-wrap'><span class='st-tip-icon'>{svg_help}</span><span class='st-tip-box st-tip-box-left'>Importe de materiales devengado en conceptos respaldados con un comercio o proveedor asignado.</span></span></div>"
+                        f"<div style='display: inline-flex; align-items: center; white-space: nowrap;'>⚠️&nbsp;<span style='color: #64748B;'>Sin Asignar:</span>&nbsp;<b>${tot_sin_mat:,.2f}</b>"
+                        f"<span class='st-tip-wrap'><span class='st-tip-icon'>{svg_help}</span><span class='st-tip-box'>💡 Costo de materiales devengado en conceptos cuantificados que aún no tienen un proveedor vinculado en el catálogo.</span></span></div>"
+                        f"<div style='display: inline-flex; align-items: center; white-space: nowrap;'>🏪&nbsp;<span style='color: #64748B;'>Comercios con Gasto:</span>&nbsp;<b>{n_comercios} {lbl_com}</b>"
+                        f"<span class='st-tip-wrap'><span class='st-tip-icon'>{svg_help}</span><span class='st-tip-box'>Número de proveedores comerciales que registran consumo de insumos en el corte seleccionado.</span></span></div>"
+                        f"<div style='display: inline-flex; align-items: center; white-space: nowrap;'>📦&nbsp;<span style='color: #1D4ED8;'>Total Materiales:</span>&nbsp;<b style='color: #2563EB; font-size: 0.93rem;'>${sub_mat:,.2f}</b>"
+                        f"<span class='st-tip-wrap'><span class='st-tip-icon'>{svg_help}</span><span class='st-tip-box st-tip-box-right'>Costo directo total de materiales ejecutados según las mediciones y volúmenes de obra de este periodo.</span></span></div>"
+                        f"</div>\n"
+                        f"<div style='height: 4px;'></div>"
+                    )
+                    st.markdown(html_barra_mat, unsafe_allow_html=True)
 
     # Distribución global inicial
     df_dist = _calcular_df_distribucion("Total Acumulado")

@@ -29,6 +29,7 @@ erDiagram
 
     personal_obra ||--o{ mediciones_campo : "0..1:N (id_personal)"
     personal_obra ||--o{ insumos_concepto : "0..1:N (id_personal)"
+    proveedores ||--o{ catalogo_conceptos : "0..1:N (id_proveedor)"
     proveedores ||--o{ insumos_concepto : "0..1:N (id_proveedor)"
 ```
 
@@ -118,6 +119,7 @@ Presupuesto contractual oficial de la obra. Soporta arquitectura **Dual Path** (
 | `costo_herramienta` | `NUMERIC` | SÍ | `0` | Dual Path | Costo analítico de herramienta y equipo. |
 | `costo_indirecto` | `NUMERIC` | SÍ | `0` | Dual Path | Costo analítico de indirectos por concepto. |
 | `porcentaje_utilidad`| `NUMERIC` | SÍ | `15.0` | Dual Path | % de utilidad específico de la partida. |
+| `id_proveedor` | `BIGINT` | SÍ | `NULL` | FK a `proveedores(id)` ON DELETE SET NULL | Proveedor comercial directo o principal de materiales. |
 | `especialidad` | `TEXT` | SÍ | `NULL` | — | Especialidad (ej. Cimentación, Albañilería). |
 | `categoria` | `TEXT` | SÍ | `NULL` | — | Subpartida o categoría de agrupación. |
 | `created_at` | `TIMESTAMPTZ` | SÍ | `now()` | — | Fecha de alta del concepto. |
