@@ -203,7 +203,7 @@ def render_catalogo_tab(supabase: Client, user_id: str, lista_proyectos: list, g
             cat_m = st.text_input("Categoría / Partida (Opcional)", placeholder="Ej: 1.1", key=f"cat_cat_{cat_c}")
             clave_m = st.text_input("Clave de Concepto *", placeholder="Ej: OC01-015-126", key=f"cat_clave_{cat_c}")
             unidad_m = st.selectbox("Unidad", unidades_list, key=f"cat_unidad_{cat_c}")
-            desc_m = st.text_area("Descripción detallada *", placeholder="Ingrese la descripción completa...", key=f"cat_desc_{cat_c}")
+            desc_m = st.text_area("Descripción detallada (Opcional)", placeholder="Ingrese la descripción completa...", key=f"cat_desc_{cat_c}")
 
             c_cant_col, c_util_col = st.columns(2)
             cant_m = c_cant_col.number_input("Cantidad Contratada", min_value=0.01, value=1.0, step=0.5, format="%.2f", key=f"cat_cant_{cat_c}")
@@ -266,8 +266,8 @@ def render_catalogo_tab(supabase: Client, user_id: str, lista_proyectos: list, g
             )
 
             if st.button("Guardar en Catálogo", type="primary", key=f"btn_save_cat_{cat_c}"):
-                if not clave_m.strip() or not desc_m.strip():
-                    st.error("⚠️ Clave y descripción son obligatorias.")
+                if not clave_m.strip():
+                    st.error("⚠️ La clave del concepto es obligatoria.")
                 else:
                     u_m_norm = normalizar_unidad(unidad_m)
                     if not admite_decimales(u_m_norm) and not float(cant_m).is_integer():
@@ -292,7 +292,7 @@ def render_catalogo_tab(supabase: Client, user_id: str, lista_proyectos: list, g
                             "especialidad": esp_m.strip(),
                             "categoria": cat_m.strip(),
                             "clave": clave_m.strip(),
-                            "descripcion": desc_m.strip(),
+                            "descripcion": desc_m.strip() if desc_m else "",
                             "unidad": u_m_norm,
                             "cantidad_contratada": cant_m_final,
                             "costo_material": mat_val,
@@ -395,7 +395,7 @@ def render_catalogo_tab(supabase: Client, user_id: str, lista_proyectos: list, g
         edited_catalogo = st.data_editor(
             df_c[[
                 "#", "clave", "especialidad", "categoria", "unidad", "cantidad_contratada",
-                "costo_material", "proveedor", "costo_mano_obra", "costo_herramienta", "costo_indirecto",
+                "proveedor", "costo_material", "costo_mano_obra", "costo_herramienta", "costo_indirecto",
                 "porcentaje_utilidad", "precio_unitario", "descripcion"
             ]],
             column_config={
@@ -405,13 +405,13 @@ def render_catalogo_tab(supabase: Client, user_id: str, lista_proyectos: list, g
                 "categoria": st.column_config.TextColumn("Categoría"),
                 "unidad": st.column_config.SelectboxColumn("Unidad", options=unidades_list, required=True),
                 "cantidad_contratada": st.column_config.NumberColumn("Cant. Contratada", format="%.2f", min_value=0.0, step=0.01, required=True),
-                "costo_material": st.column_config.NumberColumn("Costo Mat. ($)", format="$%.2f", min_value=0.0, step=0.01),
                 "proveedor": st.column_config.SelectboxColumn(
-                    "Proveedor Mat.",
+                    "Proveedor",
                     options=prov_options_list,
                     help="Casa de materiales o proveedor asignado a este concepto",
                     required=False
                 ),
+                "costo_material": st.column_config.NumberColumn("Costo Mat. ($)", format="$%.2f", min_value=0.0, step=0.01),
                 "costo_mano_obra": st.column_config.NumberColumn("Costo M.O. ($)", format="$%.2f", min_value=0.0, step=0.01),
                 "costo_herramienta": st.column_config.NumberColumn("Costo Herr. ($)", format="$%.2f", min_value=0.0, step=0.01),
                 "costo_indirecto": st.column_config.NumberColumn("Costo Ind. ($)", format="$%.2f", min_value=0.0, step=0.01),
@@ -495,8 +495,8 @@ def render_catalogo_tab(supabase: Client, user_id: str, lista_proyectos: list, g
                     val_util = pd.to_numeric(col_vals["porcentaje_utilidad"], errors="coerce")
                     up_payload["porcentaje_utilidad"] = round(max(0.0, float(val_util)), 2) if not pd.isna(val_util) else pct_util_proy_def
 
-                # Recalcular Precio Unitario
-                if "precio_unitario" in col_vals:
+                # Recalcular Precio Unitario / Componentes (BUG-019)
+                if "precio_unitario" in col_vals and not hubo_cambio_analitico:
                     val_p = col_vals["precio_unitario"]
                     if val_p is None or str(val_p).strip() in ("", "None", "nan"):
                         up_payload["precio_unitario"] = float(conc_actual.get("precio_unitario") or 0.0)
@@ -505,6 +505,11 @@ def render_catalogo_tab(supabase: Client, user_id: str, lista_proyectos: list, g
                             up_payload["precio_unitario"] = round(max(0.0, float(val_p)), 2)
                         except (ValueError, TypeError):
                             up_payload["precio_unitario"] = float(conc_actual.get("precio_unitario") or 0.0)
+                    # Al modificar directamente el P.U., se resetean los costos analíticos directos a 0.00
+                    up_payload["costo_material"] = 0.0
+                    up_payload["costo_mano_obra"] = 0.0
+                    up_payload["costo_herramienta"] = 0.0
+                    up_payload["costo_indirecto"] = 0.0
                 elif hubo_cambio_analitico:
                     c_mat_n = up_payload.get("costo_material", conc_actual.get("costo_material") or 0.0)
                     c_mo_n = up_payload.get("costo_mano_obra", conc_actual.get("costo_mano_obra") or 0.0)
@@ -512,8 +517,7 @@ def render_catalogo_tab(supabase: Client, user_id: str, lista_proyectos: list, g
                     c_ind_n = up_payload.get("costo_indirecto", conc_actual.get("costo_indirecto") or 0.0)
                     u_pct_n = up_payload.get("porcentaje_utilidad", conc_actual.get("porcentaje_utilidad") or pct_util_proy_def)
                     costo_sub_n = round(float(c_mat_n) + float(c_mo_n) + float(c_herr_n) + float(c_ind_n), 2)
-                    if costo_sub_n > 0:
-                        up_payload["precio_unitario"] = round(costo_sub_n * (1.0 + float(u_pct_n) / 100.0), 2)
+                    up_payload["precio_unitario"] = round(costo_sub_n * (1.0 + float(u_pct_n) / 100.0), 2)
 
                 if up_payload:
                     try:

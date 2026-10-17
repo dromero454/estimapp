@@ -143,7 +143,7 @@ def render_biblioteca_tab(supabase: Client, user_id: str):
             cat_m = st.text_input("Categoría / Partida (Opcional)", placeholder="Ej: 1.1", key=f"bib_cat_{bib_c}")
             clave_m = st.text_input("Clave de Concepto *", placeholder="Ej: OC01-015-126", key=f"bib_clave_{bib_c}")
             unidad_m = st.selectbox("Unidad", unidades_list, key=f"bib_unidad_{bib_c}")
-            desc_m = st.text_area("Descripción detallada *", placeholder="Ingrese la descripción completa...", key=f"bib_desc_{bib_c}")
+            desc_m = st.text_area("Descripción detallada (Opcional)", placeholder="Ingrese la descripción completa...", key=f"bib_desc_{bib_c}")
 
             # Camino 2: Expander opcional de desglose analítico
             with st.expander("📊 Desglose Analítico de Costo Directo", expanded=False):
@@ -175,8 +175,8 @@ def render_biblioteca_tab(supabase: Client, user_id: str):
             )
 
             if st.button("Guardar en Biblioteca", type="primary", key=f"btn_save_bib_{bib_c}"):
-                if not clave_m.strip() or not desc_m.strip():
-                    st.error("⚠️ Clave y descripción son obligatorias.")
+                if not clave_m.strip():
+                    st.error("⚠️ La clave de concepto es obligatoria.")
                 else:
                     mat_val = round(float(c_mat), 2)
                     mo_val = round(float(c_mo), 2)
@@ -196,7 +196,7 @@ def render_biblioteca_tab(supabase: Client, user_id: str):
                         "especialidad": esp_m.strip(),
                         "categoria": cat_m.strip(),
                         "clave": clave_m.strip(),
-                        "descripcion": desc_m.strip(),
+                        "descripcion": desc_m.strip() if desc_m else "",
                         "unidad": normalizar_unidad(unidad_m),
                         "costo_material": mat_val,
                         "costo_mano_obra": mo_val,

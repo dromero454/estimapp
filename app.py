@@ -533,8 +533,10 @@ function hideAndBindTrigger() {
                     const isInAdmin = !!doc.querySelector('.st-key-btn_volver_a_obra');
                     if (isInAdmin) {
                         url.searchParams.set('t_admin', txt);
+                        url.searchParams.set('tab_origen_bug', txt);
                     } else {
                         url.searchParams.set('t_obra', txt);
+                        url.searchParams.set('tab_origen_bug', txt);
                     }
                     window.parent.history.replaceState({}, '', url);
                 }
@@ -558,6 +560,7 @@ function hideAndBindTrigger() {
                 const txt = activeTab.innerText.trim();
                 const url = new URL(window.parent.location.href);
                 url.searchParams.set('t_admin', txt);
+                url.searchParams.set('tab_origen_bug', txt);
                 window.parent.history.replaceState({}, '', url);
             }
         }, true);
@@ -577,8 +580,10 @@ function hideAndBindTrigger() {
                         const isInAdmin = !!doc.querySelector('.st-key-btn_volver_a_obra');
                         if (isInAdmin) {
                             url.searchParams.set('t_admin', txt);
+                            url.searchParams.set('tab_origen_bug', txt);
                         } else {
                             url.searchParams.set('t_obra', txt);
+                            url.searchParams.set('tab_origen_bug', txt);
                         }
                         window.parent.history.replaceState({}, '', url);
                     }

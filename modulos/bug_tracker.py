@@ -26,7 +26,6 @@ PESTANAS_MODULOS = [
     "Control Presupuestal",
     "Captura en Campo",
     "Estimaciones y Pagos",
-    "Estimaciones",
     "Catálogo del Proyecto",
     "Biblioteca Maestra",
     "Personal y Cuadrillas",
@@ -34,6 +33,7 @@ PESTANAS_MODULOS = [
     "Proyectos",
     "Perfil / Cuenta",
     "Consola Admin",
+    "Otro",
 ]
 
 CATEGORIAS_BUGS = [
@@ -97,11 +97,44 @@ def render_bug_report_dialog(supabase: Client, user) -> None:
         unsafe_allow_html=True,
     )
 
-    # 1. Selector múltiple de pestañas / módulos afectados
+    # 1. Selector múltiple de pestañas / módulos afectados (Detección dinámica BUG-026)
+    tab_query = (
+        st.query_params.get("tab_origen_bug")
+        or st.query_params.get("t_obra")
+        or st.query_params.get("t_admin")
+        or ""
+    ).strip()
+
+    default_tab_sel = ["General"]
+    if st.session_state.get("vista_actual") == "admin":
+        default_tab_sel = ["Consola Admin"]
+    elif tab_query:
+        tab_lower = tab_query.lower()
+        if "estimacion" in tab_lower or "pago" in tab_lower:
+            default_tab_sel = ["Estimaciones y Pagos"]
+        elif "resumen" in tab_lower or "financiero" in tab_lower or "presupuestal" in tab_lower:
+            default_tab_sel = ["Resumen Financiero"]
+        elif "campo" in tab_lower or "captura" in tab_lower:
+            default_tab_sel = ["Captura en Campo"]
+        elif "catálogo" in tab_lower or "catalogo" in tab_lower:
+            default_tab_sel = ["Catálogo del Proyecto"]
+        elif "biblioteca" in tab_lower:
+            default_tab_sel = ["Biblioteca Maestra"]
+        elif "personal" in tab_lower or "cuadrilla" in tab_lower:
+            default_tab_sel = ["Personal y Cuadrillas"]
+        elif "proveedor" in tab_lower:
+            default_tab_sel = ["Proveedores"]
+        elif "proyecto" in tab_lower:
+            default_tab_sel = ["Proyectos"]
+        elif "admin" in tab_lower:
+            default_tab_sel = ["Consola Admin"]
+        elif "cuenta" in tab_lower or "perfil" in tab_lower:
+            default_tab_sel = ["Perfil / Cuenta"]
+
     tabs_sel = st.multiselect(
         "Pestañas / Módulos afectados:",
         options=PESTANAS_MODULOS,
-        default=["General"],
+        default=default_tab_sel,
         help="Indica en qué secciones de la aplicación observaste la anomalía.",
         key=f"bug_input_tabs_{v}",
     )

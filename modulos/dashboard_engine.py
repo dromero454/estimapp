@@ -126,255 +126,6 @@ def render_dashboard_tab(supabase, user_id: str, lista_proyectos: list, get_conc
     utilidad_bruta_real = round(monto_estimado_global - gasto_erogado_real, 2) if (hay_desglose_analitico and monto_estimado_global > 0) else 0.0
     pct_margen_real = round((utilidad_bruta_real / monto_estimado_global * 100), 2) if (hay_desglose_analitico and monto_estimado_global > 0) else 0.0
 
-    # Preparar tabla para el PDF y desglose integral
-    filas_dash = []
-    acumulados_cronologicos = {c["id"]: 0.0 for c in conceptos_dash}
-
-    for e in estimaciones_dash:
-        num_p = e["num_periodo"]
-        label_est = f"Estimación #{num_p}"
-        for c in conceptos_dash:
-            c_id = c["id"]
-            if (e["id"], c_id) in meds_por_est_conc:
-                cant_periodo = round(meds_por_est_conc[(e["id"], c_id)], 3)
-                acumulados_cronologicos[c_id] += cant_periodo
-                cant_acum = round(acumulados_cronologicos[c_id], 3)
-                cant_cont = float(c.get("cantidad_contratada") or 0.0)
-                pu = float(c.get("precio_unitario") or 0.0)
-                imp_periodo = round(cant_periodo * pu, 2)
-                imp_acum = round(cant_acum * pu, 2)
-                saldo_vol = round(cant_cont - cant_acum, 3)
-                saldo_fin = round((cant_cont * pu) - imp_acum, 2)
-                avance = round((cant_acum / cant_cont * 100), 1) if cant_cont > 0 else 0.0
-
-                if avance > 100.0:
-                    estatus_badge = f"🚨 Sobregirado (+{round(avance - 100.0, 1)}%)"
-                elif avance == 100.0:
-                    estatus_badge = "✅ Concluido (100%)"
-                else:
-                    estatus_badge = "🟢 En proceso"
-
-                filas_dash.append({
-                    "Estimación": label_est,
-                    "Periodo": f"{e['periodo_inicio']} al {e['periodo_fin']}",
-                    "Estado": e.get("estado", "borrador"),
-                    "Clave": c["clave"],
-                    "Unidad": normalizar_unidad(c["unidad"]),
-                    "Cant. Contratada": cant_cont,
-                    "Cant. en Periodo": cant_periodo,
-                    "Cant. Acumulada": cant_acum,
-                    "Saldo Físico": saldo_vol,
-                    "P.U. ($)": pu,
-                    "Importe Periodo ($)": imp_periodo,
-                    "Importe Acumulado ($)": imp_acum,
-                    "Saldo Financiero ($)": saldo_fin,
-                    "% Avance": avance,
-                    "Estatus": estatus_badge,
-                    "_sort_est": num_p,
-                    "_sort_avance": avance
-                })
-
-    for c in conceptos_dash:
-        if c["id"] not in conceptos_con_estimacion:
-            cant_cont = float(c.get("cantidad_contratada") or 0.0)
-            pu = float(c.get("precio_unitario") or 0.0)
-            filas_dash.append({
-                "Estimación": "Sin estimar",
-                "Periodo": "—",
-                "Estado": "pendiente",
-                "Clave": c["clave"],
-                "Unidad": normalizar_unidad(c["unidad"]),
-                "Cant. Contratada": cant_cont,
-                "Cant. en Periodo": 0.0,
-                "Cant. Acumulada": 0.0,
-                "Saldo Físico": cant_cont,
-                "P.U. ($)": pu,
-                "Importe Periodo ($)": 0.0,
-                "Importe Acumulado ($)": 0.0,
-                "Saldo Financiero ($)": round(cant_cont * pu, 2),
-                "% Avance": 0.0,
-                "Estatus": "⚪ Sin iniciar",
-                "_sort_est": 9999,
-                "_sort_avance": 0.0
-            })
-
-    df_dash = pd.DataFrame(filas_dash)
-    if not df_dash.empty:
-        df_dash = df_dash.sort_values(by=["_sort_est", "_sort_avance"], ascending=[True, False]).reset_index(drop=True)
-        df_dash.insert(3, "#", range(1, len(df_dash) + 1))
-        df_dash = df_dash.drop(columns=["_sort_est", "_sort_avance"])
-
-    # Generación y Botón de Descarga alineado a la derecha en la cabecera
-    datos_operativos = {
-        "gasto_erogado_real": gasto_erogado_real,
-        "utilidad_bruta_real": utilidad_bruta_real,
-        "pct_margen_real": pct_margen_real,
-        "total_destajos_pagados": total_destajos_pagados,
-        "costo_materiales_erogado": costo_materiales_erogado,
-        "costo_herramienta_erogado": costo_herramienta_erogado,
-        "costo_indirectos_erogado": costo_indirectos_erogado
-    }
-    pdf_bytes = generar_pdf_resumen_ejecutivo(
-        proy_info=proy_obj_actual,
-        monto_cont=monto_contratado_total,
-        monto_est=monto_estimado_global,
-        saldo_ejercer=saldo_por_ejercer,
-        pct_global=pct_global,
-        df_conceptos=df_dash,
-        datos_operativos=datos_operativos
-    )
-    fecha_gen = datetime.date.today().strftime("%d/%m/%Y")
-    contrato_nom = proy_obj_actual.get('contrato_no') or 'Obra'
-
-    with col_hdr_btn:
-        st.download_button(
-            label="📄 Exportar Resumen Ejecutivo (PDF)",
-            data=pdf_bytes,
-            file_name=f"Resumen_Ejecutivo_{contrato_nom}_{fecha_gen}.pdf",
-            mime="application/pdf",
-            use_container_width=True,
-            key="btn_pdf_resumen_ejecutivo_top"
-        )
-
-    # Helper para gráfica de dona interactiva con Altair
-    def _crear_grafica_dona(df_dist_data):
-        df_plot = df_dist_data[df_dist_data["Importe"] > 0]
-        if df_plot.empty:
-            return None
-        return alt.Chart(df_plot).mark_arc(x=175, y=120, innerRadius=65, outerRadius=105, stroke="#ffffff", strokeWidth=2).encode(
-            theta=alt.Theta(field="Importe", type="quantitative"),
-            color=alt.Color(
-                field="Rubro",
-                type="nominal",
-                scale=alt.Scale(
-                    domain=["Materiales", "Mano de Obra / Destajos", "Herramienta y Equipo", "Gastos Indirectos", "Margen de Utilidad"],
-                    range=["#2563EB", "#0D9488", "#F59E0B", "#64748B", "#10B981"]
-                ),
-                legend=alt.Legend(
-                    title="Rubro Financiero",
-                    orient="none",
-                    legendX=305,
-                    legendY=8,
-                    labelFontSize=11,
-                    titleFontSize=12,
-                    symbolType="circle"
-                )
-            ),
-            tooltip=[
-                alt.Tooltip("Rubro:N", title="Rubro"),
-                alt.Tooltip("Importe:Q", title="Monto ($)", format="$,.2f"),
-                alt.Tooltip("Participacion:N", title="Participación")
-            ]
-        ).properties(
-            height=240
-        ).configure_view(
-            strokeWidth=0
-        )
-
-    # Helper para gráfica de dona interactiva de Mano de Obra con Altair
-    def _crear_grafica_dona_mo(df_mo_data):
-        df_plot = df_mo_data[df_mo_data["Importe"] > 0]
-        if df_plot.empty:
-            return None
-        palette = ["#0D9488", "#2563EB", "#F59E0B", "#8B5CF6", "#EC4899", "#06B6D4", "#10B981", "#6366F1", "#D97706", "#4F46E5"]
-        domain_trabs = [t for t in df_plot["Trabajador"].tolist() if t != "Mano de Obra sin Asignar"]
-        range_trabs = palette[:len(domain_trabs)]
-        if "Mano de Obra sin Asignar" in df_plot["Trabajador"].values:
-            domain_trabs.append("Mano de Obra sin Asignar")
-            range_trabs.append("#94A3B8")
-
-        return alt.Chart(df_plot).mark_arc(x=175, y=120, innerRadius=65, outerRadius=105, stroke="#ffffff", strokeWidth=2).encode(
-            theta=alt.Theta(field="Importe", type="quantitative"),
-            color=alt.Color(
-                field="Trabajador",
-                type="nominal",
-                scale=alt.Scale(
-                    domain=domain_trabs,
-                    range=range_trabs
-                ),
-                legend=alt.Legend(
-                    title="Personal / Asignación",
-                    orient="none",
-                    legendX=305,
-                    legendY=8,
-                    labelFontSize=11,
-                    titleFontSize=12,
-                    symbolType="circle"
-                )
-            ),
-            tooltip=[
-                alt.Tooltip("Trabajador:N", title="Trabajador / Cuadrilla"),
-                alt.Tooltip("Modalidad:N", title="Modalidad"),
-                alt.Tooltip("Importe:Q", title="Importe ($)", format="$,.2f"),
-                alt.Tooltip("Participacion:N", title="% Participación")
-            ]
-        ).properties(
-            height=240
-        ).configure_view(
-            strokeWidth=0
-        )
-
-    # Helper para gráfica de dona interactiva de Materiales y Proveedores con Altair
-    def _crear_grafica_dona_mat(df_mat_data):
-        df_plot = df_mat_data[df_mat_data["Importe"] > 0]
-        if df_plot.empty:
-            return None
-        palette_mat = [
-            "#2563EB", "#0284C7", "#0D9488", "#10B981", "#8B5CF6", 
-            "#EC4899", "#6366F1", "#14B8A6", "#3B82F6", "#4F46E5"
-        ]
-        
-        domain_provs = []
-        range_colors = []
-        c_idx = 0
-
-        for p in df_plot["Proveedor"].tolist():
-            if p not in ("Materiales sin Asignar", "📦 Otros Proveedores (Consolidado)"):
-                domain_provs.append(p)
-                range_colors.append(palette_mat[c_idx % len(palette_mat)])
-                c_idx += 1
-
-        if "📦 Otros Proveedores (Consolidado)" in df_plot["Proveedor"].values:
-            domain_provs.append("📦 Otros Proveedores (Consolidado)")
-            range_colors.append("#64748B")
-
-        if "Materiales sin Asignar" in df_plot["Proveedor"].values:
-            domain_provs.append("Materiales sin Asignar")
-            range_colors.append("#F59E0B")
-
-        return alt.Chart(df_plot).mark_arc(
-            x=175, y=120, innerRadius=65, outerRadius=105, stroke="#ffffff", strokeWidth=2
-        ).encode(
-            theta=alt.Theta(field="Importe", type="quantitative"),
-            color=alt.Color(
-                field="Proveedor",
-                type="nominal",
-                scale=alt.Scale(
-                    domain=domain_provs,
-                    range=range_colors
-                ),
-                legend=alt.Legend(
-                    title="Proveedor / Comercio",
-                    orient="none",
-                    legendX=305,
-                    legendY=8,
-                    labelFontSize=11,
-                    titleFontSize=12,
-                    symbolType="circle"
-                )
-            ),
-            tooltip=[
-                alt.Tooltip("Proveedor:N", title="Proveedor / Comercio"),
-                alt.Tooltip("Giro:N", title="Giro Comercial"),
-                alt.Tooltip("Importe:Q", title="Gasto Estimado ($)", format="$,.2f"),
-                alt.Tooltip("Participacion:N", title="% Participación")
-            ]
-        ).properties(
-            height=240
-        ).configure_view(
-            strokeWidth=0
-        )
-
     # Pre-cálculo de costos analíticos por periodo de estimación
     costos_por_est = {}
     for e_item in estimaciones_dash:
@@ -745,6 +496,263 @@ def render_dashboard_tab(supabase, user_id: str, lista_proyectos: list, get_conc
         }
 
         return df_mat_table, df_mat_chart, kpis_mat
+
+    # Preparar tabla para el PDF y desglose integral
+    filas_dash = []
+    acumulados_cronologicos = {c["id"]: 0.0 for c in conceptos_dash}
+
+    for e in estimaciones_dash:
+        num_p = e["num_periodo"]
+        label_est = f"Estimación #{num_p}"
+        for c in conceptos_dash:
+            c_id = c["id"]
+            if (e["id"], c_id) in meds_por_est_conc:
+                cant_periodo = round(meds_por_est_conc[(e["id"], c_id)], 3)
+                acumulados_cronologicos[c_id] += cant_periodo
+                cant_acum = round(acumulados_cronologicos[c_id], 3)
+                cant_cont = float(c.get("cantidad_contratada") or 0.0)
+                pu = float(c.get("precio_unitario") or 0.0)
+                imp_periodo = round(cant_periodo * pu, 2)
+                imp_acum = round(cant_acum * pu, 2)
+                saldo_vol = round(cant_cont - cant_acum, 3)
+                saldo_fin = round((cant_cont * pu) - imp_acum, 2)
+                avance = round((cant_acum / cant_cont * 100), 1) if cant_cont > 0 else 0.0
+
+                if avance > 100.0:
+                    estatus_badge = f"🚨 Sobregirado (+{round(avance - 100.0, 1)}%)"
+                elif avance == 100.0:
+                    estatus_badge = "✅ Concluido (100%)"
+                else:
+                    estatus_badge = "🟢 En proceso"
+
+                filas_dash.append({
+                    "Estimación": label_est,
+                    "Periodo": f"{e['periodo_inicio']} al {e['periodo_fin']}",
+                    "Estado": e.get("estado", "borrador"),
+                    "Clave": c["clave"],
+                    "Unidad": normalizar_unidad(c["unidad"]),
+                    "Cant. Contratada": cant_cont,
+                    "Cant. en Periodo": cant_periodo,
+                    "Cant. Acumulada": cant_acum,
+                    "Saldo Físico": saldo_vol,
+                    "P.U. ($)": pu,
+                    "Importe Periodo ($)": imp_periodo,
+                    "Importe Acumulado ($)": imp_acum,
+                    "Saldo Financiero ($)": saldo_fin,
+                    "% Avance": avance,
+                    "Estatus": estatus_badge,
+                    "_sort_est": num_p,
+                    "_sort_avance": avance
+                })
+
+    for c in conceptos_dash:
+        if c["id"] not in conceptos_con_estimacion:
+            cant_cont = float(c.get("cantidad_contratada") or 0.0)
+            pu = float(c.get("precio_unitario") or 0.0)
+            filas_dash.append({
+                "Estimación": "Sin estimar",
+                "Periodo": "—",
+                "Estado": "pendiente",
+                "Clave": c["clave"],
+                "Unidad": normalizar_unidad(c["unidad"]),
+                "Cant. Contratada": cant_cont,
+                "Cant. en Periodo": 0.0,
+                "Cant. Acumulada": 0.0,
+                "Saldo Físico": cant_cont,
+                "P.U. ($)": pu,
+                "Importe Periodo ($)": 0.0,
+                "Importe Acumulado ($)": 0.0,
+                "Saldo Financiero ($)": round(cant_cont * pu, 2),
+                "% Avance": 0.0,
+                "Estatus": "⚪ Sin iniciar",
+                "_sort_est": 9999,
+                "_sort_avance": 0.0
+            })
+
+    df_dash = pd.DataFrame(filas_dash)
+    if not df_dash.empty:
+        df_dash = df_dash.sort_values(by=["_sort_est", "_sort_avance"], ascending=[True, False]).reset_index(drop=True)
+        df_dash.insert(3, "#", range(1, len(df_dash) + 1))
+        df_dash = df_dash.drop(columns=["_sort_est", "_sort_avance"])
+
+    # Generación y Botón de Descarga alineado a la derecha en la cabecera
+    df_mo_global, _ = _calcular_df_mano_obra("Total Acumulado")
+    _, df_mat_chart_global, _ = _calcular_df_materiales("Total Acumulado")
+
+    datos_operativos = {
+        "gasto_erogado_real": gasto_erogado_real,
+        "utilidad_bruta_real": utilidad_bruta_real,
+        "pct_margen_real": pct_margen_real,
+        "total_destajos_pagados": total_destajos_pagados,
+        "costo_materiales_erogado": costo_materiales_erogado,
+        "costo_herramienta_erogado": costo_herramienta_erogado,
+        "costo_indirectos_erogado": costo_indirectos_erogado,
+        "total_con_iva_global": total_con_iva_global,
+        "monto_iva_global": monto_iva_global,
+        "pct_iva_proy": pct_iva_proy,
+        "df_mo": df_mo_global,
+        "df_mat": df_mat_chart_global
+    }
+    pdf_bytes = generar_pdf_resumen_ejecutivo(
+        proy_info=proy_obj_actual,
+        monto_cont=monto_contratado_total,
+        monto_est=monto_estimado_global,
+        saldo_ejercer=saldo_por_ejercer,
+        pct_global=pct_global,
+        df_conceptos=df_dash,
+        datos_operativos=datos_operativos
+    )
+    fecha_gen = datetime.date.today().strftime("%d/%m/%Y")
+    contrato_nom = proy_obj_actual.get('contrato_no') or 'Obra'
+
+    with col_hdr_btn:
+        st.download_button(
+            label="📄 Exportar Resumen Ejecutivo (PDF)",
+            data=pdf_bytes,
+            file_name=f"Resumen_Ejecutivo_{contrato_nom}_{fecha_gen}.pdf",
+            mime="application/pdf",
+            use_container_width=True,
+            key="btn_pdf_resumen_ejecutivo_top"
+        )
+
+    # Helper para gráfica de dona interactiva con Altair
+    def _crear_grafica_dona(df_dist_data):
+        df_plot = df_dist_data[df_dist_data["Importe"] > 0]
+        if df_plot.empty:
+            return None
+        return alt.Chart(df_plot).mark_arc(x=175, y=120, innerRadius=65, outerRadius=105, stroke="#ffffff", strokeWidth=2).encode(
+            theta=alt.Theta(field="Importe", type="quantitative"),
+            color=alt.Color(
+                field="Rubro",
+                type="nominal",
+                scale=alt.Scale(
+                    domain=["Materiales", "Mano de Obra / Destajos", "Herramienta y Equipo", "Gastos Indirectos", "Margen de Utilidad"],
+                    range=["#2563EB", "#0D9488", "#F59E0B", "#64748B", "#10B981"]
+                ),
+                legend=alt.Legend(
+                    title="Rubro Financiero",
+                    orient="none",
+                    legendX=305,
+                    legendY=8,
+                    labelFontSize=11,
+                    titleFontSize=12,
+                    symbolType="circle"
+                )
+            ),
+            tooltip=[
+                alt.Tooltip("Rubro:N", title="Rubro"),
+                alt.Tooltip("Importe:Q", title="Monto ($)", format="$,.2f"),
+                alt.Tooltip("Participacion:N", title="Participación")
+            ]
+        ).properties(
+            height=240
+        ).configure_view(
+            strokeWidth=0
+        )
+
+    # Helper para gráfica de dona interactiva de Mano de Obra con Altair
+    def _crear_grafica_dona_mo(df_mo_data):
+        df_plot = df_mo_data[df_mo_data["Importe"] > 0]
+        if df_plot.empty:
+            return None
+        palette = ["#0D9488", "#2563EB", "#F59E0B", "#8B5CF6", "#EC4899", "#06B6D4", "#10B981", "#6366F1", "#D97706", "#4F46E5"]
+        domain_trabs = [t for t in df_plot["Trabajador"].tolist() if t != "Mano de Obra sin Asignar"]
+        range_trabs = palette[:len(domain_trabs)]
+        if "Mano de Obra sin Asignar" in df_plot["Trabajador"].values:
+            domain_trabs.append("Mano de Obra sin Asignar")
+            range_trabs.append("#94A3B8")
+
+        return alt.Chart(df_plot).mark_arc(x=175, y=120, innerRadius=65, outerRadius=105, stroke="#ffffff", strokeWidth=2).encode(
+            theta=alt.Theta(field="Importe", type="quantitative"),
+            color=alt.Color(
+                field="Trabajador",
+                type="nominal",
+                scale=alt.Scale(
+                    domain=domain_trabs,
+                    range=range_trabs
+                ),
+                legend=alt.Legend(
+                    title="Personal / Asignación",
+                    orient="none",
+                    legendX=305,
+                    legendY=8,
+                    labelFontSize=11,
+                    titleFontSize=12,
+                    symbolType="circle"
+                )
+            ),
+            tooltip=[
+                alt.Tooltip("Trabajador:N", title="Trabajador / Cuadrilla"),
+                alt.Tooltip("Modalidad:N", title="Modalidad"),
+                alt.Tooltip("Importe:Q", title="Importe ($)", format="$,.2f"),
+                alt.Tooltip("Participacion:N", title="% Participación")
+            ]
+        ).properties(
+            height=240
+        ).configure_view(
+            strokeWidth=0
+        )
+
+    # Helper para gráfica de dona interactiva de Materiales y Proveedores con Altair
+    def _crear_grafica_dona_mat(df_mat_data):
+        df_plot = df_mat_data[df_mat_data["Importe"] > 0]
+        if df_plot.empty:
+            return None
+        palette_mat = [
+            "#2563EB", "#0284C7", "#0D9488", "#10B981", "#8B5CF6", 
+            "#EC4899", "#6366F1", "#14B8A6", "#3B82F6", "#4F46E5"
+        ]
+        
+        domain_provs = []
+        range_colors = []
+        c_idx = 0
+
+        for p in df_plot["Proveedor"].tolist():
+            if p not in ("Materiales sin Asignar", "📦 Otros Proveedores (Consolidado)"):
+                domain_provs.append(p)
+                range_colors.append(palette_mat[c_idx % len(palette_mat)])
+                c_idx += 1
+
+        if "📦 Otros Proveedores (Consolidado)" in df_plot["Proveedor"].values:
+            domain_provs.append("📦 Otros Proveedores (Consolidado)")
+            range_colors.append("#64748B")
+
+        if "Materiales sin Asignar" in df_plot["Proveedor"].values:
+            domain_provs.append("Materiales sin Asignar")
+            range_colors.append("#F59E0B")
+
+        return alt.Chart(df_plot).mark_arc(
+            x=175, y=120, innerRadius=65, outerRadius=105, stroke="#ffffff", strokeWidth=2
+        ).encode(
+            theta=alt.Theta(field="Importe", type="quantitative"),
+            color=alt.Color(
+                field="Proveedor",
+                type="nominal",
+                scale=alt.Scale(
+                    domain=domain_provs,
+                    range=range_colors
+                ),
+                legend=alt.Legend(
+                    title="Proveedor / Comercio",
+                    orient="none",
+                    legendX=305,
+                    legendY=8,
+                    labelFontSize=11,
+                    titleFontSize=12,
+                    symbolType="circle"
+                )
+            ),
+            tooltip=[
+                alt.Tooltip("Proveedor:N", title="Proveedor / Comercio"),
+                alt.Tooltip("Giro:N", title="Giro Comercial"),
+                alt.Tooltip("Importe:Q", title="Gasto Estimado ($)", format="$,.2f"),
+                alt.Tooltip("Participacion:N", title="% Participación")
+            ]
+        ).properties(
+            height=240
+        ).configure_view(
+            strokeWidth=0
+        )
 
     # Helper maestro para renderizar el contenedor unificado y dinámico de análisis y distribución
     def _render_contenedor_distribucion(key_suffix: str):

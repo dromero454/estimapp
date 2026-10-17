@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 from supabase import Client
+from modulos.db_engine import get_mediciones
 
 # Especialidades estándar de mano de obra
 ESPECIALIDADES_LIST = [
@@ -42,69 +43,78 @@ def render_personal_tab(supabase: Client, user_id: str):
     # -------------------------------------------------------------
     with col_alta:
         with st.expander("➕ Registrar Nuevo Trabajador / Destajista", expanded=False):
-            with st.form(f"form_personal_{p_counter}", clear_on_submit=True):
-                nombre = st.text_input(
-                    "Nombre completo *",
-                    placeholder="Ej: Juan Pérez García",
-                    key=f"pers_nombre_{p_counter}"
+            nombre = st.text_input(
+                "Nombre completo *",
+                placeholder="Ej: Juan Pérez García",
+                key=f"pers_nombre_{p_counter}"
+            )
+
+            def _on_pers_modalidad_change():
+                if st.session_state.get(f"pers_modalidad_{p_counter}") == "Por Destajo":
+                    st.session_state[f"pers_jornal_{p_counter}"] = 0.0
+
+            c_mod, c_esp = st.columns(2)
+            with c_mod:
+                modalidad = st.selectbox(
+                    "Modalidad de Pago *",
+                    options=MODALIDADES_LIST,
+                    index=0,
+                    key=f"pers_modalidad_{p_counter}",
+                    on_change=_on_pers_modalidad_change,
+                    help="Por Destajo: Remuneración calculada por volumen medido y costo de mano de obra en APU. Por Jornada: Sueldo diario por día laborado."
+                )
+            with c_esp:
+                especialidad = st.selectbox(
+                    "Especialidad / Oficio *",
+                    options=ESPECIALIDADES_LIST,
+                    index=0,
+                    key=f"pers_especialidad_{p_counter}"
                 )
 
-                c_mod, c_esp = st.columns(2)
-                with c_mod:
-                    modalidad = st.selectbox(
-                        "Modalidad de Pago *",
-                        options=MODALIDADES_LIST,
-                        index=0,
-                        key=f"pers_modalidad_{p_counter}",
-                        help="Por Destajo: Remuneración calculada por volumen medido y costo de mano de obra en APU. Por Jornada: Sueldo diario por día laborado."
-                    )
-                with c_esp:
-                    especialidad = st.selectbox(
-                        "Especialidad / Oficio *",
-                        options=ESPECIALIDADES_LIST,
-                        index=0,
-                        key=f"pers_especialidad_{p_counter}"
-                    )
+            es_destajo = (modalidad == "Por Destajo")
+            c_jor, c_tel = st.columns(2)
+            with c_jor:
+                costo_jornal = st.number_input(
+                    "Tarifa por Jornada ($)",
+                    min_value=0.0,
+                    value=0.0,
+                    step=50.0,
+                    format="%.2f",
+                    key=f"pers_jornal_{p_counter}",
+                    disabled=es_destajo,
+                    help="Tarifa de referencia diaria (aplica cuando labora bajo esquema de jornada fija). Deshabilitada en modalidad Por Destajo."
+                )
+            with c_tel:
+                telefono = st.text_input(
+                    "Teléfono de contacto / WhatsApp",
+                    placeholder="Ej: 312 123 4567",
+                    key=f"pers_telefono_{p_counter}"
+                )
 
-                c_jor, c_tel = st.columns(2)
-                with c_jor:
-                    costo_jornal = st.number_input(
-                        "Tarifa por Jornada ($)",
-                        min_value=0.0,
-                        value=500.0,
-                        step=50.0,
-                        format="%.2f",
-                        key=f"pers_jornal_{p_counter}",
-                        help="Tarifa de referencia diaria (aplica cuando labora bajo esquema de jornada fija)."
-                    )
-                with c_tel:
-                    telefono = st.text_input(
-                        "Teléfono de contacto / WhatsApp",
-                        placeholder="Ej: 312 123 4567",
-                        key=f"pers_telefono_{p_counter}"
-                    )
+            btn_guardar_pers = st.button("Guardar Trabajador", type="primary", use_container_width=True, key=f"btn_pers_save_{p_counter}")
 
-                btn_guardar_pers = st.form_submit_button("Guardar Trabajador", type="primary", use_container_width=True)
+            if btn_guardar_pers:
+                if not nombre or not nombre.strip():
+                    st.error("⚠️ El nombre del trabajador es obligatorio.")
+                else:
+                    try:
+                        costo_final = 0.0 if es_destajo else round(float(costo_jornal), 2)
+                        supabase.table("personal_obra").insert({
+                            "user_id": user_id,
+                            "nombre": nombre.strip(),
+                            "modalidad_pago": modalidad,
+                            "especialidad": especialidad,
+                            "costo_jornal_base": costo_final,
+                            "telefono": telefono.strip() if telefono else None
+                        }).execute()
 
-                if btn_guardar_pers:
-                    if not nombre or not nombre.strip():
-                        st.error("⚠️ El nombre del trabajador es obligatorio.")
-                    else:
-                        try:
-                            supabase.table("personal_obra").insert({
-                                "user_id": user_id,
-                                "nombre": nombre.strip(),
-                                "modalidad_pago": modalidad,
-                                "especialidad": especialidad,
-                                "costo_jornal_base": round(float(costo_jornal), 2),
-                                "telefono": telefono.strip() if telefono else None
-                            }).execute()
-
-                            st.session_state["personal_form_counter"] += 1
-                            st.success(f"✅ Trabajador '{nombre.strip()}' registrado exitosamente ({modalidad}).")
-                            st.rerun()
-                        except Exception as ex:
-                            st.error(f"Error al registrar trabajador: {ex}")
+                        get_mediciones.clear()
+                        st.cache_data.clear()
+                        st.session_state["personal_form_counter"] += 1
+                        st.success(f"✅ Trabajador '{nombre.strip()}' registrado exitosamente ({modalidad}).")
+                        st.rerun()
+                    except Exception as ex:
+                        st.error(f"Error al registrar trabajador: {ex}")
 
     # -------------------------------------------------------------
     # SECCIÓN 2: CONSULTA DE TRABAJADORES ACTIVOS
@@ -154,6 +164,8 @@ def render_personal_tab(supabase: Client, user_id: str):
                     id_pers_del = pers_dict_del[pers_sel_del]
                     try:
                         supabase.table("personal_obra").delete().eq("id", id_pers_del).execute()
+                        get_mediciones.clear()
+                        st.cache_data.clear()
                         st.session_state["personal_form_counter"] += 1
                         st.success("✅ Trabajador eliminado del directorio.")
                         st.rerun()
@@ -235,6 +247,7 @@ def render_personal_tab(supabase: Client, user_id: str):
     if ed_pers_key in st.session_state and st.session_state[ed_pers_key].get("edited_rows", {}):
         cambios_guardados = 0
         error_guardado = None
+        advertencia_destajo = None
 
         for row_str, col_vals in list(st.session_state[ed_pers_key]["edited_rows"].items()):
             try:
@@ -256,16 +269,30 @@ def render_personal_tab(supabase: Client, user_id: str):
                 up_payload["nombre"] = str(v_nom).strip()
 
             if "modalidad_pago" in col_vals:
-                up_payload["modalidad_pago"] = str(col_vals["modalidad_pago"])
+                nueva_mod = str(col_vals["modalidad_pago"])
+                up_payload["modalidad_pago"] = nueva_mod
+                if nueva_mod == "Por Destajo":
+                    up_payload["costo_jornal_base"] = 0.0
 
             if "especialidad" in col_vals:
                 up_payload["especialidad"] = str(col_vals["especialidad"])
 
             if "costo_jornal_base" in col_vals:
-                try:
-                    up_payload["costo_jornal_base"] = round(max(0.0, float(col_vals["costo_jornal_base"])), 2)
-                except (ValueError, TypeError):
+                mod_actual = up_payload.get("modalidad_pago", filtrados[r_idx].get("modalidad_pago"))
+                if mod_actual == "Por Destajo":
+                    try:
+                        val_ingresado = float(col_vals["costo_jornal_base"] or 0.0)
+                    except (ValueError, TypeError):
+                        val_ingresado = 0.0
+                    if val_ingresado > 0.0:
+                        nom_t = filtrados[r_idx].get("nombre", "este trabajador")
+                        advertencia_destajo = f"💡 Para asignar una tarifa por jornada fija a '{nom_t}', primero cambia su modalidad de pago a 'Por Jornada'."
                     up_payload["costo_jornal_base"] = 0.0
+                else:
+                    try:
+                        up_payload["costo_jornal_base"] = round(max(0.0, float(col_vals["costo_jornal_base"])), 2)
+                    except (ValueError, TypeError):
+                        up_payload["costo_jornal_base"] = 0.0
 
             if "telefono" in col_vals:
                 up_payload["telefono"] = str(col_vals["telefono"] or "").strip()
@@ -283,7 +310,16 @@ def render_personal_tab(supabase: Client, user_id: str):
             st.session_state["ed_personal_counter"] += 1
             st.session_state.pop(ed_pers_key, None)
             st.rerun()
+        elif advertencia_destajo:
+            get_mediciones.clear()
+            st.cache_data.clear()
+            st.toast(advertencia_destajo, icon="💡")
+            st.session_state["ed_personal_counter"] += 1
+            st.session_state.pop(ed_pers_key, None)
+            st.rerun()
         elif cambios_guardados > 0:
+            get_mediciones.clear()
+            st.cache_data.clear()
             st.toast("✅ Datos de personal actualizados correctamente.", icon="✅")
             st.session_state["ed_personal_counter"] += 1
             st.session_state.pop(ed_pers_key, None)

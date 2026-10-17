@@ -1,6 +1,7 @@
 import streamlit as st
 import io
 import datetime
+import pandas as pd
 import matplotlib.pyplot as plt
 from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
@@ -8,7 +9,6 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 
 
-@st.cache_data(show_spinner=False)
 def generar_pdf_recibo_pagos(
     proy_info: dict,
     est_info: dict,
@@ -161,15 +161,47 @@ def generar_pdf_recibo_pagos(
                 Paragraph("<para align=right>Total Destajo ($)</para>", table_head)
             ]
         ]
+
+        # Agrupación por (Fecha, Trabajador) para combinación visual SPAN (BUG-024)
+        groups_dest = []
+        curr_key = None
+        start_row = 1
+        num_grupo = 1
+
+        for i, r in enumerate(filas_destajos):
+            key = (str(r.get("Fecha", "")), str(r.get("Trabajador", "")))
+            row_idx = i + 1
+            if curr_key is None:
+                curr_key = key
+                start_row = row_idx
+            elif key != curr_key:
+                groups_dest.append((start_row, row_idx - 1, num_grupo))
+                num_grupo += 1
+                curr_key = key
+                start_row = row_idx
+        if curr_key is not None:
+            groups_dest.append((start_row, len(filas_destajos), num_grupo))
+
+        row_to_group = {}
+        for s_r, e_r, n_g in groups_dest:
+            for r_i in range(s_r, e_r + 1):
+                row_to_group[r_i] = (s_r, e_r, n_g, r_i == s_r)
+
         for idx, r in enumerate(filas_destajos, start=1):
             c_desc = str(r.get("Concepto", ""))
             if len(c_desc) > 32:
                 c_desc = c_desc[:30] + "..."
             fecha_str = str(r.get("Fecha", ""))
+            s_r, e_r, n_g, is_first = row_to_group.get(idx, (idx, idx, idx, True))
+
+            p_num = Paragraph(f"<para align=center>{n_g}</para>", table_text) if is_first else Paragraph("", table_text)
+            p_fecha = Paragraph(f"<para align=center>{fecha_str}</para>", table_text) if is_first else Paragraph("", table_text)
+            p_trab = Paragraph(f"{r.get('Trabajador', '')}", table_text) if is_first else Paragraph("", table_text)
+
             dest_rows.append([
-                Paragraph(f"<para align=center>{idx}</para>", table_text),
-                Paragraph(f"<para align=center>{fecha_str}</para>", table_text),
-                Paragraph(f"{r.get('Trabajador', '')}", table_text),
+                p_num,
+                p_fecha,
+                p_trab,
                 Paragraph(f"{r.get('Clave', '')}", table_text),
                 Paragraph(c_desc, table_text),
                 Paragraph(f"<para align=center>{r.get('Unidad', '')}</para>", table_text),
@@ -189,7 +221,7 @@ def generar_pdf_recibo_pagos(
             Paragraph(f"<para align=right><font color='#0288D1'><b>${total_destajos:,.2f}</b></font></para>", table_text)
         ])
         t_dest = Table(dest_rows, colWidths=[20, 52, 95, 45, 138, 30, 45, 55, 60], repeatRows=1)
-        t_dest.setStyle(TableStyle([
+        dest_table_style = [
             ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1A2530")),
             ('INNERGRID', (0,0), (-1,-2), 0.5, colors.HexColor("#E2E8F0")),
             ('BOX', (0,0), (-1,-1), 1, colors.HexColor("#94A3B8")),
@@ -198,7 +230,15 @@ def generar_pdf_recibo_pagos(
             ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
             ('TOPPADDING', (0,0), (-1,-1), 2),
             ('BOTTOMPADDING', (0,0), (-1,-1), 2),
-        ]))
+        ]
+        # SPAN en columnas 0 (#), 1 (Fecha) y 2 (Trabajador) para grupos consecutivos
+        for s_r, e_r, _ in groups_dest:
+            if e_r > s_r:
+                dest_table_style.append(('SPAN', (0, s_r), (0, e_r)))
+                dest_table_style.append(('SPAN', (1, s_r), (1, e_r)))
+                dest_table_style.append(('SPAN', (2, s_r), (2, e_r)))
+
+        t_dest.setStyle(TableStyle(dest_table_style))
         story.append(t_dest)
     else:
         story.append(Paragraph("<i>No se registraron actividades por destajo en este periodo.</i>", table_text))
@@ -224,6 +264,32 @@ def generar_pdf_recibo_pagos(
                     Paragraph("<para align=center>Estatus</para>", table_head)
                 ]
             ]
+
+            # Agrupación por (Fecha, Trabajador) para combinación visual SPAN (BUG-024)
+            groups_jor = []
+            curr_key_j = None
+            start_row_j = 1
+            num_grupo_j = 1
+
+            for i, r in enumerate(filas_jornadas):
+                key = (str(r.get("Fecha", "")), str(r.get("Trabajador", "")))
+                row_idx = i + 1
+                if curr_key_j is None:
+                    curr_key_j = key
+                    start_row_j = row_idx
+                elif key != curr_key_j:
+                    groups_jor.append((start_row_j, row_idx - 1, num_grupo_j))
+                    num_grupo_j += 1
+                    curr_key_j = key
+                    start_row_j = row_idx
+            if curr_key_j is not None:
+                groups_jor.append((start_row_j, len(filas_jornadas), num_grupo_j))
+
+            row_to_group_jor = {}
+            for s_r, e_r, n_g in groups_jor:
+                for r_i in range(s_r, e_r + 1):
+                    row_to_group_jor[r_i] = (s_r, e_r, n_g, r_i == s_r)
+
             for idx, r in enumerate(filas_jornadas, start=1):
                 c_desc = str(r.get("Concepto", ""))
                 if len(c_desc) > 28:
@@ -243,16 +309,25 @@ def generar_pdf_recibo_pagos(
                     est_html = est_raw
 
                 val_mo = float(r.get("Valor M.O. Producido ($)", 0.0))
+                s_r, e_r, n_g, is_first = row_to_group_jor.get(idx, (idx, idx, idx, True))
+
+                p_num = Paragraph(f"<para align=center>{n_g}</para>", table_text) if is_first else Paragraph("", table_text)
+                p_fecha = Paragraph(f"<para align=center>{fecha_str}</para>", table_text) if is_first else Paragraph("", table_text)
+                p_trab = Paragraph(f"{r.get('Trabajador', '')}", table_text) if is_first else Paragraph("", table_text)
+                p_esp = Paragraph(f"{r.get('Especialidad', '')}", table_text) if is_first else Paragraph("", table_text)
+                p_sd = Paragraph(f"<para align=right><b>{sd_str}</b></para>", table_text) if is_first else Paragraph("", table_text)
+                p_est = Paragraph(f"<para align=center>{est_html}</para>", table_text) if is_first else Paragraph("", table_text)
+
                 jor_rows.append([
-                    Paragraph(f"<para align=center>{idx}</para>", table_text),
-                    Paragraph(f"<para align=center>{fecha_str}</para>", table_text),
-                    Paragraph(f"{r.get('Trabajador', '')}", table_text),
-                    Paragraph(f"{r.get('Especialidad', '')}", table_text),
+                    p_num,
+                    p_fecha,
+                    p_trab,
+                    p_esp,
                     Paragraph(f"{r.get('Clave', '')}", table_text),
                     Paragraph(c_desc, table_text),
                     Paragraph(f"<para align=right>${val_mo:,.2f}</para>", table_text),
-                    Paragraph(f"<para align=right><b>{sd_str}</b></para>", table_text),
-                    Paragraph(f"<para align=center>{est_html}</para>", table_text)
+                    p_sd,
+                    p_est
                 ])
             jor_rows.append([
                 Paragraph("", table_text),
@@ -266,6 +341,25 @@ def generar_pdf_recibo_pagos(
                 Paragraph("", table_text)
             ])
             t_jor = Table(jor_rows, colWidths=[20, 50, 95, 65, 45, 115, 50, 50, 50], repeatRows=1)
+            jor_table_style = [
+                ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1A2530")),
+                ('INNERGRID', (0,0), (-1,-2), 0.5, colors.HexColor("#E2E8F0")),
+                ('BOX', (0,0), (-1,-1), 1, colors.HexColor("#94A3B8")),
+                ('BACKGROUND', (0,-1), (-1,-1), colors.HexColor("#F1F5F9")),
+                ('LINEABOVE', (0,-1), (-1,-1), 1, colors.HexColor("#D97706")),
+                ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+                ('TOPPADDING', (0,0), (-1,-1), 2.5),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 2.5),
+            ]
+            for s_r, e_r, _ in groups_jor:
+                if e_r > s_r:
+                    jor_table_style.append(('SPAN', (0, s_r), (0, e_r)))
+                    jor_table_style.append(('SPAN', (1, s_r), (1, e_r)))
+                    jor_table_style.append(('SPAN', (2, s_r), (2, e_r)))
+                    jor_table_style.append(('SPAN', (3, s_r), (3, e_r)))
+                    jor_table_style.append(('SPAN', (7, s_r), (7, e_r)))
+                    jor_table_style.append(('SPAN', (8, s_r), (8, e_r)))
+            t_jor.setStyle(TableStyle(jor_table_style))
         else:
             jor_rows = [
                 [
@@ -295,17 +389,16 @@ def generar_pdf_recibo_pagos(
                 Paragraph(f"<para align=right><font color='#D97706'><b>${total_jornadas:,.2f}</b></font></para>", table_text)
             ])
             t_jor = Table(jor_rows, colWidths=[25, 160, 115, 80, 80, 80], repeatRows=1)
-
-        t_jor.setStyle(TableStyle([
-            ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1A2530")),
-            ('INNERGRID', (0,0), (-1,-2), 0.5, colors.HexColor("#E2E8F0")),
-            ('BOX', (0,0), (-1,-1), 1, colors.HexColor("#94A3B8")),
-            ('BACKGROUND', (0,-1), (-1,-1), colors.HexColor("#F1F5F9")),
-            ('LINEABOVE', (0,-1), (-1,-1), 1, colors.HexColor("#D97706")),
-            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-            ('TOPPADDING', (0,0), (-1,-1), 2.5),
-            ('BOTTOMPADDING', (0,0), (-1,-1), 2.5),
-        ]))
+            t_jor.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1A2530")),
+                ('INNERGRID', (0,0), (-1,-2), 0.5, colors.HexColor("#E2E8F0")),
+                ('BOX', (0,0), (-1,-1), 1, colors.HexColor("#94A3B8")),
+                ('BACKGROUND', (0,-1), (-1,-1), colors.HexColor("#F1F5F9")),
+                ('LINEABOVE', (0,-1), (-1,-1), 1, colors.HexColor("#D97706")),
+                ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+                ('TOPPADDING', (0,0), (-1,-1), 2.5),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 2.5),
+            ]))
         story.append(t_jor)
     else:
         story.append(Paragraph("<i>No se registraron jornadas laboradas en este periodo.</i>", table_text))
@@ -379,13 +472,11 @@ def generar_pdf_recibo_pagos(
     return pdf_buffer.getvalue()
 
 
-@st.cache_data(show_spinner=False)
 def generar_pdf_recibo_raya(proy_info: dict, est_info: dict, filas_raya: list, total_raya: float) -> bytes:
     """Wrapper de compatibilidad retroactiva hacia generar_pdf_recibo_pagos."""
     return generar_pdf_recibo_pagos(proy_info, est_info, [], filas_raya, total_raya)
 
 
-@st.cache_data(show_spinner=False)
 def generar_pdf_resumen_ejecutivo(proy_info, monto_cont, monto_est, saldo_ejercer, pct_global, df_conceptos, datos_operativos=None):
     """
     Genera el informe ejecutivo en PDF adaptando su estructura, títulos, KPIs
@@ -491,29 +582,33 @@ def generar_pdf_resumen_ejecutivo(proy_info, monto_cont, monto_est, saldo_ejerce
     story.append(t_info)
     story.append(Spacer(1, 8))
 
-    # 2. Bloque de KPIs según Modalidad
+    # 2. Bloque de KPIs según Modalidad (BUG-023: 6 KPIs para obra privada)
     d_op = datos_operativos or {}
     gasto_real = float(d_op.get("gasto_erogado_real", 0.0))
     utilidad_real = float(d_op.get("utilidad_bruta_real", 0.0))
     pct_margen = float(d_op.get("pct_margen_real", 15.0))
     total_destajos = float(d_op.get("total_destajos_pagados", 0.0))
+    pct_iva = float(d_op.get("pct_iva_proy", proy_info.get("porcentaje_iva", 0.0) or 0.0))
+    total_con_iva = float(d_op.get("total_con_iva_global", monto_est * (1.0 + pct_iva / 100.0)))
 
     if modalidad == "privada":
         kpi_data = [
             [
-                Paragraph(f"<para align=center><b>Presupuesto Cliente</b><br/><font size=10 color='#1A2530'><b>${monto_cont:,.2f}</b></font></para>", table_text),
-                Paragraph(f"<para align=center><b>Gasto Erogado Real</b><br/><font size=10 color='#D32F2F'><b>${gasto_real:,.2f}</b></font></para>", table_text),
-                Paragraph(f"<para align=center><b>Utilidad Bruta Real</b><br/><font size=10 color='#00875A'><b>${utilidad_real:,.2f}</b></font></para>", table_text),
-                Paragraph(f"<para align=center><b>Margen Real</b><br/><font size=10 color='#0288D1'><b>{pct_margen:.1f}%</b></font></para>", table_text)
+                Paragraph(f"<para align=center><b>Presupuesto Pactado</b><br/><font size=8.5 color='#1A2530'><b>${monto_cont:,.2f}</b></font></para>", table_text),
+                Paragraph(f"<para align=center><b>Total con I.V.A.</b><br/><font size=8.5 color='#2563EB'><b>${total_con_iva:,.2f}</b></font></para>", table_text),
+                Paragraph(f"<para align=center><b>Gasto Reportable</b><br/><font size=8.5 color='#0D9488'><b>${monto_est:,.2f}</b></font></para>", table_text),
+                Paragraph(f"<para align=center><b>Gasto Erogado Real</b><br/><font size=8.5 color='#D32F2F'><b>${gasto_real:,.2f}</b></font></para>", table_text),
+                Paragraph(f"<para align=center><b>Utilidad Bruta Real</b><br/><font size=8.5 color='#00875A'><b>${utilidad_real:,.2f}</b></font></para>", table_text),
+                Paragraph(f"<para align=center><b>Margen Real</b><br/><font size=8.5 color='#0288D1'><b>{pct_margen:.1f}%</b></font></para>", table_text)
             ]
         ]
-        t_kpi = Table(kpi_data, colWidths=[135, 135, 135, 135])
+        t_kpi = Table(kpi_data, colWidths=[90, 90, 90, 90, 90, 90])
         t_kpi.setStyle(TableStyle([
             ('BACKGROUND', (0,0), (-1,-1), colors.white),
             ('BOX', (0,0), (-1,-1), 1.2, colors.HexColor("#2563EB")),
             ('INNERGRID', (0,0), (-1,-1), 0.5, colors.HexColor("#E2E8F0")),
-            ('TOPPADDING', (0,0), (-1,-1), 5),
-            ('BOTTOMPADDING', (0,0), (-1,-1), 5),
+            ('TOPPADDING', (0,0), (-1,-1), 4),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 4),
         ]))
         story.append(t_kpi)
 
@@ -570,57 +665,180 @@ def generar_pdf_resumen_ejecutivo(proy_info, monto_cont, monto_est, saldo_ejerce
     c_herr = float(d_op.get("costo_herramienta_erogado", 0.0))
     c_ind = float(d_op.get("costo_indirectos_erogado", 0.0))
 
-    if modalidad == "privada":
-        fig, ax = plt.subplots(figsize=(7.2, 1.1), dpi=150)
-        rubros = ['Materiales', 'Mano Obra', 'Herramienta', 'Indirectos', 'Utilidad']
-        montos = [max(0.0, c_mat), max(0.0, total_destajos), max(0.0, c_herr), max(0.0, c_ind), max(0.0, utilidad_real)]
-        colores = ['#2563EB', '#0D9488', '#F59E0B', '#64748B', '#10B981']
+    section_h_style = ParagraphStyle(
+        'SecH',
+        parent=styles['Normal'],
+        fontSize=9.5,
+        leading=13,
+        textColor=colors.HexColor("#0D9488"),
+        fontName="Helvetica-Bold",
+        spaceBefore=10,
+        spaceAfter=4
+    )
 
-        y_pos = range(len(rubros))
-        ax.barh(rubros[::-1], montos[::-1], color=colores[::-1], height=0.55)
-        ax.set_xlabel('Monto en MXN', fontsize=7)
-        ax.set_title('Distribución de Costos y Utilidad Operativa', fontsize=8, pad=3)
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
-        ax.tick_params(axis='both', which='both', labelsize=7)
-        plt.tight_layout()
+    def _crear_bloque_dona_y_tabla(titulo_seccion, montos_items, callout_top, callout_bot, col_header_name):
+        story.append(Paragraph(f"<b>{titulo_seccion}</b>", section_h_style))
 
-        chart_buf = io.BytesIO()
-        plt.savefig(chart_buf, format='png', bbox_inches='tight')
-        plt.close(fig)
-        chart_buf.seek(0)
-        story.append(RLImage(chart_buf, width=540, height=80))
+        items_validos = [it for it in montos_items if it[1] > 0]
+        tot = sum(it[1] for it in items_validos)
 
-    elif modalidad == "mixta":
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(7.2, 1.0), dpi=150)
-        # Bar 1: Contractual
-        cats = ['Balance']
-        ax1.barh(cats, [monto_est], color='#00875A', height=0.45, label=f'Ejercido ({pct_global:.1f}%)')
-        ax1.barh(cats, [saldo_ejercer], left=[monto_est], color='#CBD5E1', height=0.45, label='Saldo')
-        limite = max(monto_cont * 1.05, 1.0)
-        ax1.set_xlim(0, limite)
-        ax1.set_title('Avance Contractual Oficial', fontsize=7.5, pad=3)
-        ax1.legend(loc='lower center', bbox_to_anchor=(0.5, 1.02), ncol=2, frameon=False, fontsize=6.5)
-        ax1.spines['top'].set_visible(False)
-        ax1.spines['right'].set_visible(False)
-        ax1.tick_params(axis='both', labelsize=6.5)
+        if tot > 0:
+            fig, ax = plt.subplots(figsize=(2.2, 2.2), dpi=250)
+            fig.patch.set_alpha(0.0)
+            ax.patch.set_alpha(0.0)
 
-        # Bar 2: Desglose de Costos
-        rubros = ['Mat', 'M.O.', 'Herr', 'Ind', 'Util']
-        montos = [max(0.0, c_mat), max(0.0, total_destajos), max(0.0, c_herr), max(0.0, c_ind), max(0.0, utilidad_real)]
-        colores = ['#2563EB', '#0D9488', '#F59E0B', '#64748B', '#10B981']
-        ax2.bar(rubros, montos, color=colores, width=0.55)
-        ax2.set_title('Distribución de Costos Erogados', fontsize=7.5, pad=3)
-        ax2.spines['top'].set_visible(False)
-        ax2.spines['right'].set_visible(False)
-        ax2.tick_params(axis='both', labelsize=6.5)
-        plt.tight_layout()
+            montos_vals = [it[1] for it in items_validos]
+            colores_vals = [it[2] for it in items_validos]
 
-        chart_buf = io.BytesIO()
-        plt.savefig(chart_buf, format='png', bbox_inches='tight')
-        plt.close(fig)
-        chart_buf.seek(0)
-        story.append(RLImage(chart_buf, width=540, height=75))
+            wedges, _ = ax.pie(
+                montos_vals,
+                colors=colores_vals,
+                wedgeprops=dict(width=0.38, edgecolor='white', linewidth=2.5),
+                startangle=90
+            )
+
+            # Texto central dentro del orificio de la dona (estilo Dashboard)
+            ax.text(0, 0.12, callout_top, ha='center', va='center', fontsize=6.5, weight='bold', color='#64748B')
+            ax.text(0, -0.12, callout_bot, ha='center', va='center', fontsize=9.0, weight='bold', color='#1A2530')
+
+            ax.axis('equal')
+            plt.tight_layout(pad=0.2)
+
+            chart_buf = io.BytesIO()
+            plt.savefig(chart_buf, format='png', bbox_inches='tight', transparent=True, dpi=250)
+            plt.close(fig)
+            chart_buf.seek(0)
+            donut_img = RLImage(chart_buf, width=130, height=130)
+
+            # Tabla complementaria elegante con viñetas de color nativas de ReportLab (colWidths=[180, 105, 55], sum=340pt)
+            t_desglose_rows = [
+                [
+                    Paragraph(f"<b>{col_header_name}</b>", table_head),
+                    Paragraph("<para align=right><b>Importe ($)</b></para>", table_head),
+                    Paragraph("<para align=center><b>% Total</b></para>", table_head)
+                ]
+            ]
+            for nom, mnt, col in items_validos:
+                pct = (mnt / tot * 100.0) if tot > 0 else 0.0
+                bullet = f"<font color='{col}'>■</font> "
+                t_desglose_rows.append([
+                    Paragraph(f"{bullet}<b>{nom}</b>", table_text),
+                    Paragraph(f"<para align=right>${mnt:,.2f}</para>", table_text),
+                    Paragraph(f"<para align=center><b>{pct:.1f}%</b></para>", table_text)
+                ])
+
+            t_desglose_rows.append([
+                Paragraph("<b>TOTAL ANALIZADO:</b>", table_text),
+                Paragraph(f"<para align=right><b>${tot:,.2f}</b></para>", table_text),
+                Paragraph("<para align=center><b>100.0%</b></para>", table_text)
+            ])
+
+            t_desglose = Table(t_desglose_rows, colWidths=[180, 105, 55])
+            t_desglose.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1A2530")),
+                ('INNERGRID', (0,0), (-1,-2), 0.5, colors.HexColor("#E2E8F0")),
+                ('BOX', (0,0), (-1,-1), 1, colors.HexColor("#94A3B8")),
+                ('BACKGROUND', (0,-1), (-1,-1), colors.HexColor("#F8FAFC")),
+                ('LINEABOVE', (0,-1), (-1,-1), 1, colors.HexColor("#0D9488")),
+                ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+                ('TOPPADDING', (0,0), (-1,-1), 3),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 3),
+            ]))
+
+            # Disposición horizontal: Columna izquierda 200 pt (dona centrada), Columna derecha 340 pt (tabla flush a la derecha)
+            t_layout = Table([[donut_img, t_desglose]], colWidths=[200, 340])
+            t_layout.setStyle(TableStyle([
+                ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+                ('ALIGN', (0,0), (0,0), 'CENTER'),
+                ('ALIGN', (1,0), (1,0), 'RIGHT'),
+                ('LEFTPADDING', (0,0), (-1,-1), 0),
+                ('RIGHTPADDING', (0,0), (-1,-1), 0),
+                ('TOPPADDING', (0,0), (-1,-1), 2),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 2),
+            ]))
+            story.append(t_layout)
+        else:
+            story.append(Paragraph("<i>Sin registros para esta sección.</i>", table_text))
+
+    if modalidad in ("privada", "mixta"):
+        # 1. Dona General: Costos y Margen
+        rubros_def = [
+            ("Materiales", max(0.0, c_mat), "#2563EB"),
+            ("Mano de Obra / Destajos", max(0.0, total_destajos), "#0D9488"),
+            ("Herramienta y Equipo", max(0.0, c_herr), "#F59E0B"),
+            ("Gastos Indirectos", max(0.0, c_ind), "#64748B"),
+            ("Margen de Utilidad", max(0.0, utilidad_real), "#10B981")
+        ]
+        _crear_bloque_dona_y_tabla(
+            titulo_seccion="1. General: Costos y Margen",
+            montos_items=rubros_def,
+            callout_top="TOTAL EROGADO",
+            callout_bot=f"${gasto_real:,.2f}",
+            col_header_name="Rubro Financiero"
+        )
+
+        # 2. Dona Personal: Mano de Obra y Cuadrillas
+        df_mo = d_op.get("df_mo")
+        rubros_mo = []
+        palette_mo = ["#0D9488", "#2563EB", "#F59E0B", "#8B5CF6", "#EC4899", "#06B6D4", "#10B981", "#6366F1", "#D97706", "#4F46E5"]
+        total_mo = 0.0
+        if isinstance(df_mo, pd.DataFrame) and not df_mo.empty:
+            c_idx = 0
+            for _, r in df_mo.iterrows():
+                imp = float(r.get("Importe", 0.0))
+                if imp <= 0:
+                    continue
+                total_mo += imp
+                trab = str(r.get("Trabajador", "Personal"))
+                mod = str(r.get("Modalidad", ""))
+                label = f"{trab} ({mod})" if mod and mod != "Sin Asignar" else trab
+                if trab == "Mano de Obra sin Asignar":
+                    col = "#94A3B8"
+                else:
+                    col = palette_mo[c_idx % len(palette_mo)]
+                    c_idx += 1
+                rubros_mo.append((label, imp, col))
+
+        _crear_bloque_dona_y_tabla(
+            titulo_seccion="2. Personal: Mano de Obra y Cuadrillas",
+            montos_items=rubros_mo,
+            callout_top="TOTAL M.O.",
+            callout_bot=f"${total_mo:,.2f}",
+            col_header_name="Trabajador / Cuadrilla"
+        )
+
+        # 3. Dona Proveedores: Materiales e Insumos
+        df_mat = d_op.get("df_mat")
+        rubros_mat = []
+        palette_mat = [
+            "#2563EB", "#0284C7", "#0D9488", "#10B981", "#8B5CF6", 
+            "#EC4899", "#6366F1", "#14B8A6", "#3B82F6", "#4F46E5"
+        ]
+        total_mat = 0.0
+        if isinstance(df_mat, pd.DataFrame) and not df_mat.empty:
+            c_idx = 0
+            for _, r in df_mat.iterrows():
+                imp = float(r.get("Importe", 0.0))
+                if imp <= 0:
+                    continue
+                total_mat += imp
+                prov = str(r.get("Proveedor", "Proveedor"))
+                if prov == "📦 Otros Proveedores (Consolidado)":
+                    col = "#64748B"
+                elif prov == "Materiales sin Asignar":
+                    col = "#F59E0B"
+                else:
+                    col = palette_mat[c_idx % len(palette_mat)]
+                    c_idx += 1
+                rubros_mat.append((prov, imp, col))
+
+        _crear_bloque_dona_y_tabla(
+            titulo_seccion="3. Proveedores: Materiales e Insumos",
+            montos_items=rubros_mat,
+            callout_top="TOTAL MAT.",
+            callout_bot=f"${total_mat:,.2f}",
+            col_header_name="Proveedor / Comercio"
+        )
 
     else:
         # Obra Pública tradicional
@@ -646,10 +864,12 @@ def generar_pdf_resumen_ejecutivo(proy_info, monto_cont, monto_est, saldo_ejerce
 
     story.append(Spacer(1, 8))
 
-    # 4. Tabla de Conceptos
+    # 4. Tabla de Conceptos (BUG-023: Columna Estimación incluida, ancho 540 pt exactos)
+    story.append(Paragraph("<b>4. Desglose Detallado por Concepto de Obra</b>", section_h_style))
     table_rows = [
         [
             Paragraph("<para align=center>#</para>", table_head),
+            Paragraph("<para align=center>Estimación</para>", table_head),
             Paragraph("<para align=center>Clave</para>", table_head),
             Paragraph("<para align=center>Und</para>", table_head),
             Paragraph("<para align=center>Cant. Cont.</para>", table_head),
@@ -664,8 +884,10 @@ def generar_pdf_resumen_ejecutivo(proy_info, monto_cont, monto_est, saldo_ejerce
     for idx, row in df_conceptos.iterrows():
         p_avance = float(row.get("% Avance", 0.0))
         color_pct = "#D32F2F" if p_avance > 100.0 else "#00875A"
+        est_val = str(row.get("Estimación", "")).replace("Estimación ", "Est. ")
         table_rows.append([
             Paragraph(f"<para align=center>{idx+1}</para>", table_text),
+            Paragraph(f"<para align=center>{est_val}</para>", table_text),
             Paragraph(f"{row.get('Clave', '')}", table_text),
             Paragraph(f"<para align=center>{row.get('Unidad', '')}</para>", table_text),
             Paragraph(f"<para align=right>{float(row.get('Cant. Contratada', 0)):,.2f}</para>", table_text),
@@ -676,7 +898,7 @@ def generar_pdf_resumen_ejecutivo(proy_info, monto_cont, monto_est, saldo_ejerce
             Paragraph(f"<para align=center><font color='{color_pct}'><b>{p_avance:.1f}%</b></font></para>", table_text),
         ])
 
-    t_table = Table(table_rows, colWidths=[23, 72, 35, 65, 65, 60, 75, 75, 70], repeatRows=1)
+    t_table = Table(table_rows, colWidths=[20, 62, 60, 30, 56, 56, 58, 72, 72, 54], repeatRows=1)
     t_table.setStyle(TableStyle([
         ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1A2530")),
         ('INNERGRID', (0,0), (-1,-1), 0.5, colors.HexColor("#E2E8F0")),

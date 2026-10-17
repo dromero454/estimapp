@@ -361,7 +361,7 @@ def render_estimaciones_tab(supabase, user_id: str, lista_proyectos: list, get_e
         st.markdown("---")
         st.markdown("##### 👷 Liquidación de Pagos y Control de Destajos:")
         
-        col_sel_est_raya, _ = st.columns([2, 1])
+        col_sel_est_raya, col_btn_raya_pdf = st.columns([2, 1])
         est_raya_sel_label = col_sel_est_raya.selectbox(
             "Seleccionar Estimación para Auditoría de Pagos:",
             est_labels,
@@ -496,6 +496,20 @@ def render_estimaciones_tab(supabase, user_id: str, lista_proyectos: list, get_e
                 total_liquidado_periodo = total_destajos_periodo + total_jornadas_monto_periodo
                 total_general_mo = total_liquidado_periodo + total_mo_sin_asignar_periodo
 
+                # Descarga Oficial del Recibo de Liquidación de Pagos en PDF (Reubicado en cabecera BUG-021)
+                with col_btn_raya_pdf:
+                    st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+                    pdf_pagos_bytes = generar_pdf_recibo_pagos(proy_obj_actual, est_obj_raya, filas_destajos, filas_jornadas, total_liquidado_periodo)
+                    contrato_nom = proy_obj_actual.get('contrato_no') or 'Obra'
+                    st.download_button(
+                        label="📄 Descargar Recibo de Pago (PDF)",
+                        data=pdf_pagos_bytes,
+                        file_name=f"Recibo_Liquidacion_Pagos_{contrato_nom}_Est_{est_obj_raya['num_periodo']}.pdf",
+                        mime="application/pdf",
+                        use_container_width=True,
+                        key="btn_descarga_recibo_pagos"
+                    )
+
                 col_r1, col_r2, col_r3, col_r4, col_r5 = st.columns(5)
                 col_r1.metric("Gran Total Mano de Obra", f"${total_general_mo:,.2f} MXN")
                 col_r2.metric("Total por Destajos", f"${total_destajos_periodo:,.2f} MXN")
@@ -508,7 +522,7 @@ def render_estimaciones_tab(supabase, user_id: str, lista_proyectos: list, get_e
                 col_r5.metric("Jornadas Acumuladas", f"{total_jornadas_cant_periodo:.2f}")
 
                 if total_mo_sin_asignar_periodo > 0:
-                    st.info(f"💡 Se registraron **\${total_mo_sin_asignar_periodo:,.2f} MXN** de mano de obra en conceptos cuantificados sin trabajador asignado. Para incluirlos formalmente en las tablas de liquidación y en el recibo oficial PDF, asigna a un destajista o trabajador en la pestaña **Captura en Campo**.")
+                    st.info(f"💡 Se registraron **${total_mo_sin_asignar_periodo:,.2f} MXN** de mano de obra en conceptos cuantificados sin trabajador asignado. Para incluirlos formalmente en las tablas de liquidación y en el recibo oficial PDF, asigna a un destajista o trabajador en la pestaña **Captura en Campo**.")
 
                 # =============================================================
                 # TABLA 1: ACTIVIDADES POR DESTAJO (SUPERIOR)
@@ -565,18 +579,6 @@ def render_estimaciones_tab(supabase, user_id: str, lista_proyectos: list, get_e
                     )
                 else:
                     st.warning("⚠️ No se registraron jornadas laboradas en este periodo de corte.")
-
-                # Descarga Oficial del Recibo de Liquidación de Pagos en PDF
-                pdf_pagos_bytes = generar_pdf_recibo_pagos(proy_obj_actual, est_obj_raya, filas_destajos, filas_jornadas, total_liquidado_periodo)
-                contrato_nom = proy_obj_actual.get('contrato_no') or 'Obra'
-                st.download_button(
-                    label="📄 Descargar Recibo de Liquidación (PDF)",
-                    data=pdf_pagos_bytes,
-                    file_name=f"Recibo_Liquidacion_Pagos_{contrato_nom}_Est_{est_obj_raya['num_periodo']}.pdf",
-                    mime="application/pdf",
-                    use_container_width=True,
-                    key="btn_descarga_recibo_pagos"
-                )
 
         # Muestra métricas de telemetría si están registradas para la estimación activa
         clima_est = clima_dict.get(est_obj_raya["id"])

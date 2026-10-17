@@ -421,9 +421,18 @@ def render_mediciones_tab(supabase, user_id: str, lista_proyectos: list, get_est
                         else:
                             up_payload["fecha"] = str(val_f)[:10]
 
-                for k in ["Localización", "Eje", "Tramo"]:
-                    if k in col_vals:
-                        up_payload[k.lower()] = str(col_vals[k] or "").strip()
+                if "Localización" in col_vals:
+                    val_loc = str(col_vals["Localización"] or "").strip()
+                    if not val_loc:
+                        error_med_msg = "⚠️ La localización es obligatoria y no puede quedar vacía."
+                        break
+                    up_payload["localizacion"] = val_loc
+
+                if "Eje" in col_vals:
+                    up_payload["eje"] = str(col_vals["Eje"] or "").strip()
+
+                if "Tramo" in col_vals:
+                    up_payload["tramo"] = str(col_vals["Tramo"] or "").strip()
 
                 for k in ["Largo / Factor", "Ancho / Kilos", "Alto", "Pzas"]:
                     if k in col_vals:
